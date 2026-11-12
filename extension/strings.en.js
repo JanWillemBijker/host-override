@@ -593,4 +593,6 @@ export const EN = {
  "toegevoegd": "added",
  "(zelfde server)": "(same server)",
  "Subdomein": "Subdomain",
+ "Null-MX: {z} ontvangt bewust geen e-mail.": "Null MX: {z} deliberately receives no e-mail.",
+ "DKIM is ingetrokken (lege sleutel) voor: {s}.": "DKIM is revoked (empty key) for: {s}.",
 };

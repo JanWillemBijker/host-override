@@ -204,7 +204,7 @@ async function renderSite(state) {
   } else if (r.source === "live") text = t("Komt overeen met publieke DNS.");
   note.hidden = !text;
   note.textContent = text;
-  note.className = "srcNote " + r.source;
+  note.className = "srcNote src-" + r.source; // niet ".rule": die klasse is de regelrij
   note.style.borderLeftColor = r.source === "rule" && ruleGroup ? ruleGroup.color : "";
 
   $("permBtn").hidden = granted;

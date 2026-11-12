@@ -165,10 +165,10 @@ body.side [role=tabpanel] { flex: none; }
 .pill.differs { background: #9c4a00; color: #fff; }
 .pill.near, .pill.neutral { background: var(--field); color: var(--fg); border: 1px solid var(--line); }
 .srcNote { font-size: 12px; margin: 6px 0 2px; padding: 6px 8px; border-radius: 6px; background: var(--field); border-left: 3px solid var(--muted); overflow-wrap: anywhere; }
-.srcNote.rule { border-left-color: var(--accent); }
-.srcNote.hosts { border-left-color: #6741d9; }
-.srcNote.differs { border-left-color: #b35900; }
-.srcNote.live { border-left-color: var(--ok); }
+.srcNote.src-rule { border-left-color: var(--accent); }
+.srcNote.src-hosts { border-left-color: #6741d9; }
+.srcNote.src-differs { border-left-color: #b35900; }
+.srcNote.src-live { border-left-color: var(--ok); }
 .b.hosts { background: #6741d9; color: #fff; }
 
 /* Indicator-instellingen */

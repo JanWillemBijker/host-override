@@ -152,7 +152,7 @@ async function runMigration(useCrt) {
 
   // 2. Website live en nieuw naast elkaar (status, keten, headers, tijd) + 3. certificaat nieuw
   const webP = (async () => {
-    const liveIp = ctx.liveIps[0];
+    const liveIp = ctx.liveIps.find((ip) => ip !== override?.ip) || ctx.liveIps[0];
     if (!override) { add("web", "warn", t("Geen nieuwe server opgegeven: alleen de live site gecontroleerd.")); }
     const [L, N] = await Promise.all([
       liveIp ? attempt(api("/__check", { host: name, ip: liveIp, detail: true })) : Promise.resolve(null),
@@ -220,7 +220,8 @@ async function runMigration(useCrt) {
     ]);
     const mxs = mx.ok ? mx.v.answers.filter((a) => a.type === "MX").sort((a, b) => a.pref - b.pref) : [];
     const liveIps = new Set(ctx.liveIps);
-    if (!mxs.length) add("mail", "info", t("Geen MX-records: {z} ontvangt geen e-mail.", { z: zone }));
+    const nullMx = mxs.length === 1 && /^\.?$/.test(mxs[0].host);
+    if (!mxs.length || nullMx) add("mail", "info", nullMx ? t("Null-MX: {z} ontvangt bewust geen e-mail.", { z: zone }) : t("Geen MX-records: {z} ontvangt geen e-mail.", { z: zone }));
     else {
       add("mail", "ok", t("MX: {list}", { list: mxs.map((m) => `${m.pref} ${m.host}`).join(", ") }));
       for (const m of mxs) {
@@ -242,8 +243,11 @@ async function runMigration(useCrt) {
       if (ipHit.length && override) add("mail", "warn", t("SPF noemt het oude server-IP ({ip}). Verstuurt de nieuwe server ook mail (contactformulieren, webshop), voeg dan ip4:{n} toe.", { ip: ipHit.join(", "), n: override.ip }));
       if (mechs.some((m) => /^[+?~]?a(:|$)/.test(m) || /^[+?~]?mx(:|$)/.test(m))) add("mail", "info", t("SPF gebruikt \"a\" of \"mx\": na de DNS-wissel mag ook het nieuwe IP mail versturen namens {z}. Klopt dat zo?", { z: zone }));
     }
-    const dk = DKIM_SELECTORS.map((s, i) => [s, dkim[i].filter((x) => /v=DKIM1|k=rsa|p=/i.test(x))]).filter(([, v]) => v.length);
-    add("mail", dk.length ? "ok" : mxs.length ? "info" : "info", dk.length
+    const dkAll = DKIM_SELECTORS.map((s, i) => [s, dkim[i].filter((x) => /v=DKIM1|k=rsa|p=/i.test(x))]).filter(([, v]) => v.length);
+    // Lege sleutel (p=) = ingetrokken; vaak via een wildcard op _domainkey.
+    const dk = dkAll.filter(([, v]) => v.some((x) => /p=[A-Za-z0-9+/]/.test(x)));
+    if (!dk.length && dkAll.length) add("mail", "info", t("DKIM is ingetrokken (lege sleutel) voor: {s}.", { s: dkAll.map(([s]) => s).join(", ") }));
+    else add("mail", dk.length ? "ok" : mxs.length ? "info" : "info", dk.length
       ? t("DKIM gevonden voor selector(s): {s} (best effort: alleen veelgebruikte selectors gecontroleerd).", { s: dk.map(([s]) => s).join(", ") })
       : t("Geen DKIM gevonden bij de veelgebruikte selectors ({s}). Best effort: je provider kan een andere selector gebruiken.", { s: DKIM_SELECTORS.join(", ") }));
     const dm = dmarc.filter((x) => /^v=DMARC1/i.test(x));

@@ -414,7 +414,9 @@ export function analyzeConnections(rec, active, hostsHits = {}) {
     };
   });
   const regs = new Map();
-  for (const r of rows) if (r.kind === "rule" && !regs.has(r.reg)) regs.set(r.reg, r.rule);
+  // Voorkeur voor de regel van de pagina zelf, daarna de host met de meeste verzoeken (opslag sorteert sleutels).
+  const ruled = rows.filter((r) => r.kind === "rule").sort((a, b) => (b.host === rec?.page) - (a.host === rec?.page) || b.n - a.n);
+  for (const r of ruled) if (!regs.has(r.reg)) regs.set(r.reg, r.rule);
   for (const r of active) { const reg = regDomain(r.host); if (!regs.has(reg)) regs.set(reg, r); }
   for (const r of rows) {
     if (r.kind === "live" && !isIp(r.host) && regs.has(r.reg)) { r.stillLive = true; r.suggest = regs.get(r.reg); }
