@@ -39,7 +39,33 @@ Vanuit deze map kan het ook met `./install.sh <extensie-id> <geheim>` (macOS/Lin
 - Sneltoets **Alt+Shift+H** zet alles aan of uit (wijzigen via `chrome://extensions/shortcuts`).
 - **Testvenster** opent met één klik een tweede Chrome (eigen profiel `chrome-test`) dat jouw regels gebruikt, met de huidige pagina. Handig voor twee vensters naast elkaar. De helper start dat venster. Lukt dat niet, dan kopieer je het commando (macOS, Windows cmd of PowerShell, Linux) en plak je het zelf in je terminal. Het commando werkt ook zonder helper.
 - **DNS-check** is een tab in de popup zelf (naast Regels), met subtabs voor Samenvatting, Records, Nameservers, Resolvers, Servers en E-mail. Het doet alles wat je anders met `dig` doet: records (A, AAAA, CNAME, MX, NS, TXT, SOA, CAA met TTL), de delegatie vanaf de root, elke nameserver rechtstreeks bevraagd (authoritative, SOA-serial, A-record), vergelijking van resolvers (systeem, Cloudflare, Google, Quad9, OpenDNS) om te zien of een wijziging overal door is, SPF en DMARC, en een servercontrole per IP: HTTP en HTTPS met de juiste hostnaam, redirect, certificaat (geldig voor het domein, vertrouwd, verloopdatum) en reverse DNS. Staat er een override voor het domein, dan vergelijkt het live en test naast elkaar. Bovenaan staat een samenvatting met fouten en aandachtspunten, en je kopieert het rapport met één klik. Dit werkt via de helper (versie 6). De check start automatisch voor de huidige site, secties met problemen klappen vanzelf open, je kunt een test-IP invullen om live en test te vergelijken, en recente domeinen worden onthouden.
-- **Delen** toont je regels in hosts-formaat. Plakken bij een collega en "Toevoegen uit tekst" kiezen is genoeg.
+- **Delen** toont je regels in hosts-formaat. Plakken bij een collega en "Toevoegen uit tekst" kiezen is genoeg. Groepen gaan mee als `# group: Naam #kleur` (met `off` erachter als de groep uit staat), notities als `# notitie` achter de regel.
+
+### Groepen (omgevingen)
+- Regels staan in groepen met een naam en kleur, bijvoorbeeld "Klant X – staging". Een hele groep zet je met één schakelaar aan of uit; onder Meer kun je kiezen voor **maar één groep tegelijk actief**.
+- Groepen zijn in te klappen. Het tandwiel opent naam, kleur, verzoek-headers en (bij een abonnement) de lijst-instellingen. Via **⋯** bij een regel verplaats je hem naar een andere groep en geef je hem een **notitie** (tweede regel in de lijst, tooltip, in de export als `# notitie`).
+- De groepskleur zie je in de badge op het icoon (als er één groep actief is), in de huidige-site-kaart en in de indicator in de pagina (optie "kleur van de groep gebruiken"); de naam kan in de indicatortekst met `{group}`.
+- Bestaande regels van vóór de groepen komen automatisch in de groep "Mijn regels".
+
+### Hostnaam als doel
+Een regel mag naar een hostnaam wijzen in plaats van een IP, bijvoorbeeld `server123.hostingpartij.nl`. De helper zoekt die op met de resolver van het systeem (ongeveer 60 seconden gecachet, 10 seconden bij een fout) en probeert alle adressen (IPv6 en IPv4). De popup toont het gevonden IP onder de regel. Strenge controle: geen wildcard, minstens één punt (of `localhost`), en het laatste deel bevat een letter.
+
+### Verzoek-headers per groep
+In de groepsinstellingen: **Geen cache** (`Cache-Control: no-cache` en `Pragma: no-cache`), **Basic-auth** (gebruikersnaam/wachtwoord voor een staging achter het inlogvenster van de browser) en maximaal 10 **eigen headers**. Ze gelden alleen voor de hosts van die groep en alleen zolang de groep aan staat (via `declarativeNetRequest`). Chrome zet ze alleen op hosts waarvoor de extensie toegang heeft; de groepsinstellingen vragen daar zo nodig om. Let op: een CDN zoals Cloudflare kan ondanks "geen cache" een kopie leveren, en Basic-auth helpt niet bij WordPress- of app-logins. Niet toegestaan: Host, Cookie, Authorization (gebruik Basic-auth), Origin, Referer, hop-by-hop-headers, `Sec-*`, `Proxy-*`.
+
+### Verbindingen
+Tab **Verbindingen**: alle hosts (en IP's) waar de huidige tab sinds de laatste paginaweergave iets van laadde, met het aantal verzoeken per type en of het via een regel, het hosts-bestand of live ging. Oranje **nog live**: een host van hetzelfde domein als een overschreven host (www, cdn, api) komt nog van de live server; met **Regel met zelfde IP** los je dat met één klik op. Vereist de toegang tot alle sites (zelfde als IP-weergave). Alleen hostnaam, IP, type en status worden bijgehouden, per tab in de sessie.
+
+### Abonnementen en sync
+- **Abonneren** (Meer): een regellijst op een https-URL in hosts-formaat (optioneel met `# group:`), vernieuwd handmatig, elk uur of elke dag. Max 256 KB en 2000 regels. De regels zijn alleen-lezen en komen in een eigen groep die eerst uit staat. Chrome vraagt bij abonneren toegang tot alleen die website.
+- **Synchroniseren** (Meer, standaard uit): eigen regels, groepen, notities, abonnementen (alleen de URL) en instellingen via de sync-opslag van Chrome. Nooit de helper-sleutel, Basic-auth-wachtwoorden of de aan/uit-schakelaar. Maximaal ongeveer 90 KB.
+
+### Back-up en publieke DNS
+- **Back-up** (Meer): alles naar één JSON-bestand, en terug met een voorbeeld (samenvoegen of alles vervangen). Helper-sleutel en wachtwoorden alleen als je dat aanvinkt.
+- **Publieke DNS** voor "Opzoeken" en "wijkt af van publieke DNS": Cloudflare (standaard), Google, Quad9 of via de helper (DNS-server van je systeem).
+
+### Migratie-check (DNS-check)
+Sectie **Migratie-check**, op klik: vergelijkt live met de nieuwe server (je regel of het test-IP). Domeinregistratie via RDAP (registrar, verloopdatum, DNSSEC, locks, met uitleg), website live en nieuw naast elkaar (redirectketen, status, beveiligingsheaders, reactietijd), certificaat van de nieuwe server (domein + www, vertrouwd, verloopdatum), e-mail (MX, SPF, DKIM met veelgebruikte selectors, DMARC, MTA-STS, autodiscover/autoconfig) en optioneel subdomeinen uit Certificate Transparency (crt.sh, alleen als je dat aanvinkt) met "Regel toevoegen". Uitkomst als checklist (groen/oranje/rood), te kopiëren als tekst of Markdown.
 
 ## Hoe "niet live" wordt bepaald
 
@@ -47,13 +73,17 @@ Vanuit deze map kan het ook met `./install.sh <extensie-id> <geheim>` (macOS/Lin
 2. **Hosts-bestand** (via de helper, alleen als die gekoppeld is): staat de naam erin met een eigen IP, dan is dat zeker. Een regel met `0.0.0.0` of `::` is een blokkade; als de pagina toch laadde, telt die niet. Een hosts-bestand met meer dan 50 namen op `127.0.0.1`/`::1` wordt als blokkeerlijst gezien. `localhost`, `broadcasthost`, `ip6-*` en de eigen computernaam worden overgeslagen.
 3. **Wijkt af van publieke DNS** (vermoeden): het verbonden IP staat niet in het antwoord van Cloudflare DNS (A en AAAA samen, IPv4-mapped IPv6 genormaliseerd). Dit kan ook een VPN, proxy, lokale DNS of een CDN met geo-DNS zijn. Daarom: zachte formulering in de popup, zit het verbonden IP in hetzelfde /24 (IPv4) of /48 (IPv6) als een publiek adres dan heet het "wijkt licht af" en volgen geen badge en geen indicator, en de automatische controle (die elke hostnaam naar Cloudflare stuurt) staat standaard uit.
 
+## Helper-uitbreidingen binnen protocol 6
+
+`/__status` meldt naast de versie ook `features`: `hosts`, `targets` (hostnaam als doel), `resolve` (`POST /__resolve {"names": [...]}`, max 50), `check2` (`/__check` met `"detail": true`: redirectketen, headers, certificaat www), `crtsh` (`POST /__crtsh {"domain"}`) en `rdap` (`POST /__rdap {"domain"}`). Allemaal met dezelfde controles (geheim, Origin, Host). Een oudere v6-helper zonder een uitbreiding geeft een duidelijke melding in de popup (setup-commando opnieuw plakken).
+
 ## Helper-endpoint `/__hosts` (protocol 6)
 
 `POST /__hosts` met `{"names": ["a.nl"]}` geeft alleen de treffers voor die namen (max 50); `{}` geeft een compact overzicht (overrides tot 1000 regels, blokkeringen alleen geteld met een voorbeeld van 50). `GET /__hosts?names=…` mag ook, maar de extensie gebruikt POST omdat Chrome bij GET geen Origin-header meestuurt. Zelfde controles als de andere opdrachten (geheim, Origin, Host). Het bestand wordt hooguit tot 5 MB gelezen (daarboven alleen het begin, `truncated: true`) en gecachet op grootte en wijzigingstijd. De helper-versie blijft 6: dit endpoint is een uitbreiding, een oudere v6-helper zonder `/__hosts` levert gewoon geen hosts-informatie op.
 
 ## Testen
 
-`node tests/run.mjs` test de hosts-parser, de beslisregels en de indicator-instellingen, en start een eigen helper op een vrije poort met een tijdelijke HOME en een nep-hosts-bestand. Daarvoor leest de helper de omgevingsvariabele `HOST_OVERRIDE_HOSTS_FILE` (alleen voor tests; de extensie kan die niet zetten en de setup-scripts doen dat niet). Een draaiende helper op poort 8899 en `~/.host-override` worden niet aangeraakt.
+`node tests/run.mjs` test de hosts-parser, de beslisregels, de indicator-instellingen, groepen/notities/hosts-formaat, headers (declarativeNetRequest), verbindingen, abonnementen, sync, back-up en DoH-wire-formaat, en start een eigen helper op een vrije poort met een tijdelijke HOME en een nep-hosts-bestand. Daarvoor leest de helper de omgevingsvariabelen `HOST_OVERRIDE_HOSTS_FILE` en `HOST_OVERRIDE_TEST_PORTS` (alleen voor tests; de extensie kan die niet zetten en de setup-scripts doen dat niet). Met `NET=1` lopen ook netwerktests mee (crt.sh, RDAP). Een draaiende helper op poort 8899 en `~/.host-override` worden niet aangeraakt.
 
 ## Delen en Chrome Web Store
 
@@ -84,6 +114,9 @@ macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Ver
 - De helper-installatie op Windows en Linux is geschreven en syntactisch gecontroleerd, maar nog niet op die systemen uitgeprobeerd.
 - Poort 8899 staat vast (`extension/common.js`, `extension/helper/proxy.js`; voor tests kan de helper met `PORT=...` op een andere poort).
 - Het IP geldt voor alle poorten van dat domein.
+- Het "registreerbare domein" (voor "nog live" en de migratie-check) wordt bij benadering bepaald, zonder volledige Public Suffix List.
+- Headers per groep werken alleen op hosts waarvoor de extensie toegang heeft; bij navigatie vanaf een andere site is toegang tot alle sites nodig.
+- Een helper zonder Node.js is nog niet gebouwd; zie `store/HELPER-ZONDER-NODE.md`.
 - In incognito is de extensie uit, dus daar zie je geen IP-kaart.
 
 
@@ -106,4 +139,5 @@ macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Ver
 - **Strengere invoercontrole:** domeinen (labels a-z, 0-9, -, max 63 tekens, optioneel `*.`) en IP's (IPv4 zonder voorloopnullen, geldige IPv6) worden overal hetzelfde gecontroleerd: popup, PAC-regel, testvenster-commando en helper.
 - **Hosts-bestand en live-check:** de extensie herkent sites die via je hosts-bestand (macOS, Windows, Linux, via de helper, alleen lezen) of een afwijkend IP (ten opzichte van publieke DNS) niet het live IP gebruiken. Zichtbaar in de popup, de DNS-check, de badge op het icoon en een overzicht onder Meer (kopiëren of importeren als regels).
 - **Indicator in de pagina:** het TEST-label is nu instelbaar: badge, balk of rand, positie, kleur, tekst, grootte, dekking, verbergen bij muis erover of klik. Ook voor het hosts-bestand en (optioneel) afwijkende DNS.
+- **Groepen, notities, hostnaam als doel, headers per groep, verbindingen, abonnementen, sync, back-up, keuze publieke DNS en migratie-check** (zie hierboven bij Gebruiken).
 - **Toegankelijkheid:** betere contrasten (AA) in licht en donker, zichtbare focus op alle bedieningselementen, foutmeldingen op de tab Meer staan nu ook op die tab, sneltoets en TEST-label vertaald.
