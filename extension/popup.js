@@ -114,6 +114,13 @@ async function refreshStatus(state) {
     showHelp(t("Zet de andere proxy- of VPN-extensie uit via chrome://extensions."));
   } else if (!state.enabled) setStatus("", t("Uit: alles gaat direct naar de live site"));
   else if (s.active === 0) setStatus("", t("Geen actieve regels"));
+  else if (s.pushFailed) {
+    setStatus("bad", t("De helper weigert de regels"));
+    const hostTargets = activeRules(state).some((r) => isTargetHost(r.ip));
+    showHelp(hostTargets && !s.features.includes("targets")
+      ? t("Een regel heeft een hostnaam als doel. Deze helper kent dat nog niet: plak het setup-commando opnieuw om hem bij te werken.")
+      : t("Plak het setup-commando opnieuw. Tot dan gaan de domeinen op je lijst nergens heen."));
+  }
   else setStatus("ok", s.active === 1 ? t("Actief voor 1 regel") : t("Actief voor {n} regels", { n: s.active }));
 }
 

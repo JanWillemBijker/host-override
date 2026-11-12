@@ -1,4 +1,4 @@
-import { isHost, isIp, matchRule, activeRules, loadState, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
+import { isHost, isIp, isTarget, isTargetHost, matchRule, activeRules, loadState, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
 import { t } from "./i18n.js";
 
 const RESOLVERS = [
@@ -96,7 +96,13 @@ async function run(name, resolver) {
   const testIp = $("dTestIp").value.trim();
   // Regels van groepen die aan staan (ook als de hoofdschakelaar uit staat: dan vergelijk je live met wat je zou testen).
   const ruleHit = matchRule(activeRules({ ...state, enabled: true }), name);
-  const override = ruleHit || (isIp(testIp) ? { ip: testIp } : null);
+  let override = ruleHit || (isTarget(testIp) ? { ip: testIp } : null);
+  // Doel is een hostnaam: eerst het IP opzoeken (zoals de helper dat voor de proxy doet).
+  if (override && isTargetHost(override.ip)) {
+    const r = await attempt(api("/__resolve", { names: [override.ip] }));
+    const ip = r.ok ? r.v.results?.[override.ip]?.ips?.find(isIp) : null;
+    override = ip ? { ...override, name: override.ip, ip } : null;
+  }
   const sec = (s) => (l, x) => live() && addF(l, x, s);
 
   // 1. Records
@@ -323,7 +329,7 @@ async function run(name, resolver) {
     }
     setSubG("cSrv", results.map((r) => r.ip).join(", "));
     const cmp = override
-      ? (ruleHit ? t("Host Override stuurt {name} naar {ip}.", { name, ip: override.ip }) : t("Vergelijking met test-IP: {name} naar {ip}.", { name, ip: override.ip })) + " "
+      ? (ruleHit ? t("Host Override stuurt {name} naar {ip}.", { name, ip: override.name ? `${override.name} (${override.ip})` : override.ip }) : t("Vergelijking met test-IP: {name} naar {ip}.", { name, ip: override.name ? `${override.name} (${override.ip})` : override.ip })) + " "
       : "";
     setBodyG("cSrv",
       h("p", { class: "muted" }, cmp + t("Rechtstreeks naar elk IP, met de juiste hostnaam en certificaatnaam (SNI).") + (override ? "" : " " + t("Vul hierboven een test-IP in om je testserver te vergelijken."))),
@@ -373,7 +379,7 @@ async function start() {
   if (!name) { $("err").textContent = t("Vul een geldig domein in."); return; }
   $("domain").value = name;
   const tIp = $("dTestIp").value.trim();
-  if (tIp && !isIp(tIp)) { $("err").textContent = t("Het test-IP is ongeldig."); return; }
+  if (tIp && !isTarget(tIp.toLowerCase())) { $("err").textContent = t("Het test-IP is ongeldig."); return; }
   $("banner").hidden = true;
   $("dHint").hidden = true;
   const st = await helperStatus();

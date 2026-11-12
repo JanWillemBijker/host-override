@@ -10,11 +10,15 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
+const dns = require("dns");
 
 let tools = null; // DNS-tools (dnstools.js), optioneel naast proxy.js
 try { tools = require("./dnstools.js"); } catch { /* oudere installatie: DNS-pagina meldt dat een update nodig is */ }
 
 const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__status, /__hosts (hosts-bestand lezen)
+// Uitbreidingen binnen protocol 6 (de extensie ziet in /__status welke er zijn):
+// targets = doel mag een hostnaam zijn, resolve = /__resolve
+const FEATURES = ["hosts", "targets", "resolve"];
 const PORT = Number(process.env.PORT || 8899);
 const DIR = path.join(os.homedir(), ".host-override");
 const FILE = path.join(DIR, "rules.json");
@@ -23,6 +27,9 @@ const CONFIG = path.join(DIR, "config.json");
 // Strikte hostnaam-controle (zelfde regel als de extensie): labels a-z, 0-9, -, optioneel "*." vooraan.
 const HOST_RE = /^(\*\.)?(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/i;
 const isHost = (h) => typeof h === "string" && h.length <= 255 && HOST_RE.test(h);
+// Doel als hostnaam: geen wildcard, max 253, laatste label bevat een letter (zelfde regel als de extensie).
+const isTargetHost = (h) => typeof h === "string" && h.length <= 253 && !h.startsWith("*.") && HOST_RE.test(h) && /[a-z]/i.test(h.slice(h.lastIndexOf(".") + 1));
+const isTarget = (t) => typeof t === "string" && (net.isIP(t) > 0 || isTargetHost(t));
 
 // Wie de helper mag aansturen. Het setup-commando uit de extensie schrijft config.json met het ID van die
 // extensie en een willekeurig geheim (32 bytes, hex) dat alleen de extensie en deze helper kennen.
@@ -71,7 +78,50 @@ function save() {
 }
 
 function valid(list) {
-  return Array.isArray(list) && list.length <= 5000 && list.every((r) => r && isHost(r.host) && typeof r.ip === "string" && net.isIP(r.ip));
+  return Array.isArray(list) && list.length <= 5000 && list.every((r) => r && isHost(r.host) && isTarget(r.ip));
+}
+
+// ---------- Doel als hostnaam: opzoeken via de systeem-resolver, ~60 s gecachet ----------
+// (dns.lookup gebruikt de resolver van het besturingssysteem, inclusief het hosts-bestand.)
+const RESOLVE_TTL = 60 * 1000, RESOLVE_FAIL_TTL = 10 * 1000;
+const resolveCache = new Map(); // naam -> { ips, error, exp, at }
+const inflight = new Map();
+function resolveName(name) {
+  name = name.toLowerCase();
+  const c = resolveCache.get(name);
+  if (c && c.exp > Date.now()) return Promise.resolve(c);
+  if (inflight.has(name)) return inflight.get(name);
+  const p = new Promise((resolve) => {
+    dns.lookup(name, { all: true, verbatim: true }, (err, addrs) => {
+      const now = Date.now();
+      const v = err || !addrs?.length
+        ? { ips: [], error: err ? err.code || err.message : "geen adres", exp: now + RESOLVE_FAIL_TTL, at: now }
+        : { ips: [...new Set(addrs.map((a) => a.address))].slice(0, 8), error: null, exp: now + RESOLVE_TTL, at: now };
+      resolveCache.set(name, v);
+      if (resolveCache.size > 500) resolveCache.delete(resolveCache.keys().next().value);
+      inflight.delete(name);
+      resolve(v);
+    });
+  });
+  inflight.set(name, p);
+  return p;
+}
+// Doel van een regel controleren: IP's direct, hostnamen via de cache. Gooit een fout als het niet lukt.
+async function targetIp(target) {
+  if (net.isIP(target)) return target;
+  const r = await resolveName(target);
+  if (!r.ips.length) throw new Error(`${target}: ${r.error}`);
+  return r.ips[0];
+}
+// lookup-functie voor net.connect/http.request: zelfde cache, alle adressen (Node probeert IPv6 en IPv4,
+// autoSelectFamily), zodat een doel als "localhost" of een dual-stack-server gewoon werkt.
+function cachedLookup(hostname, opts, cb) {
+  if (typeof opts === "function") { cb = opts; opts = {}; }
+  resolveName(hostname).then((r) => {
+    if (!r.ips.length) return cb(Object.assign(new Error(r.error || "ENOTFOUND"), { code: "ENOTFOUND" }));
+    const list = r.ips.map((address) => ({ address, family: net.isIP(address) }));
+    if (opts && opts.all) cb(null, list); else cb(null, list[0].address, list[0].family);
+  });
 }
 
 function lookup(hostname) {
@@ -173,7 +223,7 @@ function launch(req, res) {
     try { data = JSON.parse(body); } catch { return reply(400, { error: "ongeldige invoer" }); }
     const list = data.rules;
     if (!Array.isArray(list) || list.length === 0 || list.length > 500 ||
-        !list.every((r) => r && isHost(r.host) && typeof r.ip === "string" && net.isIP(r.ip))) {
+        !list.every((r) => r && isHost(r.host) && isTarget(r.ip))) {
       return reply(400, { error: "geen geldige regels" });
     }
     let url = null;
@@ -211,6 +261,16 @@ const DNS_API = {
     if (typeof d.name !== "string" || d.name.length > 253) throw new Error("ongeldige naam");
     return tools.trace(d.name);
   },
+  // Doel-hostnamen opzoeken zoals de proxy dat doet (systeem-resolver, zelfde cache).
+  async "/__resolve"(d) {
+    if (!Array.isArray(d.names) || d.names.length > 50 || !d.names.every(isTargetHost)) throw new Error("ongeldige namen");
+    const results = {};
+    await Promise.all(d.names.map(async (n) => {
+      const r = await resolveName(n);
+      results[n] = { ips: r.ips, error: r.error, age: Math.round((Date.now() - r.at) / 1000) };
+    }));
+    return { results };
+  },
   async "/__check"(d) {
     if (!isHost(d.host) || d.host.startsWith("*.") || typeof d.ip !== "string" || !net.isIP(d.ip)) throw new Error("ongeldige invoer");
     return tools.check(d.host, d.ip);
@@ -220,7 +280,7 @@ const DNS_API = {
 function dnsApi(req, res) {
   const reply = (code, obj) => res.writeHead(code, { "Content-Type": "application/json" }).end(JSON.stringify(obj));
   if (!fromExtension(req)) return deny(res);
-  if (!tools) return reply(501, { error: "DNS-tools ontbreken, werk de helper bij" });
+  if (!tools && req.url.split("?")[0] !== "/__resolve") return reply(501, { error: "DNS-tools ontbreken, werk de helper bij" });
   if (req.method !== "POST") return reply(405, { error: "POST verwacht" });
   const handler = DNS_API[req.url.split("?")[0]];
   let body = "";
@@ -276,7 +336,7 @@ function hostsApi(req, res) {
 // voordat ze het geheim of regels stuurt. Een ander programma op poort 8899 kan dat bewijs niet leveren.
 function status(req, res) {
   const nonce = new URL(req.url, "http://x").searchParams.get("nonce") || "";
-  const out = { helper: HELPER_VERSION, configured: !!config };
+  const out = { helper: HELPER_VERSION, configured: !!config, features: FEATURES };
   if (config && /^[0-9a-f]{32,128}$/.test(nonce)) {
     out.proof = crypto.createHmac("sha256", config.secret).update("host-override/status:" + nonce).digest("hex");
   }
@@ -307,14 +367,17 @@ const server = http.createServer((req, res) => {
   if (u.protocol !== "http:") { res.writeHead(400).end("proxy only"); return; }
   const port = Number(u.port || 80);
   if (!portAllowed(u.hostname, port)) { res.writeHead(403).end("port not allowed"); return; }
-  const target = lookup(u.hostname) || u.hostname;
-  const out = http.request(
-    { host: target, port, method: req.method, path: u.pathname + u.search, headers: req.headers },
-    (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); }
-  );
-  out.setTimeout(IDLE_MS, () => out.destroy(new Error("timeout")));
-  out.on("error", (e) => { if (!res.headersSent) res.writeHead(502); res.end("upstream error: " + e.message); });
-  req.pipe(out);
+  const mapped = lookup(u.hostname);
+  (mapped ? targetIp(mapped) : Promise.resolve(u.hostname)).then(() => {
+    const target = mapped || u.hostname;
+    const out = http.request(
+      { host: target, port, method: req.method, path: u.pathname + u.search, headers: req.headers, ...(mapped ? { lookup: cachedLookup } : {}) },
+      (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); }
+    );
+    out.setTimeout(IDLE_MS, () => out.destroy(new Error("timeout")));
+    out.on("error", (e) => { if (!res.headersSent) res.writeHead(502); res.end("upstream error: " + e.message); });
+    req.pipe(out);
+  }, (e) => { res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" }).end("Host Override: doel niet gevonden (" + e.message + ")"); });
 });
 server.maxConnections = 512;
 server.headersTimeout = 30 * 1000;
@@ -325,8 +388,18 @@ server.on("connect", (req, client, head) => {
   const hp = splitHostPort(req.url, 443);
   if (!hp) { client.end("HTTP/1.1 400 Bad Request\r\n\r\n"); return; }
   if (!portAllowed(hp.host, hp.port)) { client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
-  const target = lookup(hp.host) || hp.host;
-  const upstream = net.connect({ port: hp.port, host: target, timeout: 15 * 1000 }, () => {
+  const mapped = lookup(hp.host);
+  if (mapped && !net.isIP(mapped)) {
+    client.pause();
+    targetIp(mapped).then(() => { client.resume(); tunnel(client, head, hp.port, mapped, cachedLookup); },
+      () => client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
+    return;
+  }
+  tunnel(client, head, hp.port, mapped || hp.host);
+});
+
+function tunnel(client, head, port, target, lookup) {
+  const upstream = net.connect({ port, host: target, timeout: 15 * 1000, ...(lookup ? { lookup, autoSelectFamily: true } : {}) }, () => {
     upstream.setTimeout(IDLE_MS);
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head.length) upstream.write(head);
@@ -340,7 +413,7 @@ server.on("connect", (req, client, head) => {
   upstream.on("close", close);
   client.on("error", close);
   client.on("close", close);
-});
+}
 
 server.on("error", (e) => {
   if (e.code === "EADDRINUSE") console.error(`Poort ${PORT} is al in gebruik. Draait de proxy al?`);

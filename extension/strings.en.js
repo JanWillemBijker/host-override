@@ -373,4 +373,9 @@ export const EN = {
  "IP voor alle eigen regels": "IP for all own rules",
  "1.2.3.4 of server.nl": "1.2.3.4 or server.com",
  "IP-adres of hostnaam": "IP address or hostname",
+ "De helper weigert de regels": "The helper rejects the rules",
+ "Een regel heeft een hostnaam als doel. Deze helper kent dat nog niet: plak het setup-commando opnieuw om hem bij te werken.": "A rule has a hostname as its target. This helper does not support that yet: paste the setup command again to update it.",
+ "Plak het setup-commando opnieuw. Tot dan gaan de domeinen op je lijst nergens heen.": "Paste the setup command again. Until then the domains on your list go nowhere.",
+ "Test-IP of hostnaam (optioneel)": "Test IP or hostname (optional)",
+ "Resolver": "Resolver",
 };

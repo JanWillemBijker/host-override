@@ -86,6 +86,8 @@ async function status() {
     setup: info.reachable && !outdated && !info.verified,
     blocked: levelOfControl === "controlled_by_other_extensions",
     error: info.error,
+    features: info.features || [],
+    pushFailed: active > 0 && info.verified && !ok,
   };
 }
 

@@ -371,6 +371,59 @@ try {
     await req("/__hosts"); await req("/__hosts?names=a.example.com"); await req("/__hosts", { method: "POST", body: { names: ["x.example"] } });
     assert.deepEqual({ h: sha(), m: fs.statSync(HOSTS).mtimeMs }, before);
   });
+  // ---------- Doel als hostnaam ----------
+  await test("status meldt de uitbreidingen (features)", async () => {
+    const r = await req(`/__status?nonce=${"ab".repeat(16)}`, { token: null, origin: null, marker: false });
+    for (const f of ["hosts", "targets", "resolve"]) assert.ok(r.json.features.includes(f), f);
+  });
+  await test("/__resolve: systeem-resolver, alleen met geheim, strikte namen", async () => {
+    assert.equal((await req("/__resolve", { method: "POST", body: { names: ["localhost"] }, token: null })).status, 403);
+    assert.equal((await req("/__resolve", { method: "POST", body: { names: ["localhost"] }, origin: "https://evil.example" })).status, 403);
+    const r = await req("/__resolve", { method: "POST", body: { names: ["localhost", "does-not-exist.invalid"] } });
+    assert.equal(r.status, 200);
+    assert.ok(r.json.results.localhost.ips.some((ip) => ip === "127.0.0.1" || ip === "::1"), JSON.stringify(r.json));
+    assert.deepEqual(r.json.results["does-not-exist.invalid"].ips, []);
+    assert.ok(r.json.results["does-not-exist.invalid"].error);
+    for (const bad of [["*.x.nl"], ["1.2.3.4"], ["a b"], ["x.nl;id"], Array.from({ length: 51 }, (_, i) => `n${i}.example`), "localhost"]) {
+      assert.equal((await req("/__resolve", { method: "POST", body: { names: bad } })).status, 400, JSON.stringify(bad).slice(0, 40));
+    }
+  });
+  await test("/__rules accepteert een hostnaam als doel; de proxy verbindt via het opgezochte IP", async () => {
+    const site = http.createServer((q, s) => s.end("hallo van " + q.headers.host));
+    await new Promise((r) => site.listen(0, "127.0.0.1", r));
+    const sport = site.address().port;
+    try {
+      const bad = await req("/__rules", { method: "POST", body: [{ host: "x.nl", ip: "*.evil.nl" }] });
+      assert.equal(bad.status, 400);
+      const ok = await req("/__rules", { method: "POST", body: [{ host: "staging.example.test", ip: "localhost" }] });
+      assert.equal(ok.status, 200);
+      // Gewoon HTTP-proxyverzoek (zoals Chrome dat via de PAC-regel doet).
+      const body = await new Promise((res, rej) => {
+        const r = http.request({ host: "127.0.0.1", port, method: "GET", path: `http://staging.example.test:${sport}/`, headers: { Host: `staging.example.test:${sport}` } },
+          (resp) => { let d = ""; resp.on("data", (c) => (d += c)); resp.on("end", () => res(d)); });
+        r.on("error", rej); r.end();
+      });
+      assert.equal(body, `hallo van staging.example.test:${sport}`);
+      // CONNECT-tunnel (HTTPS-pad) naar dezelfde hostnaam.
+      const tunnel = await new Promise((res, rej) => {
+        const sock = net.connect(port, "127.0.0.1", () => sock.write(`CONNECT staging.example.test:${sport} HTTP/1.1\r\nHost: staging.example.test:${sport}\r\n\r\n`));
+        let d = "";
+        sock.on("data", (c) => {
+          d += c;
+          if (d.includes("\r\n\r\n") && !d.includes("hallo")) sock.write(`GET / HTTP/1.1\r\nHost: tunnel.test\r\nConnection: close\r\n\r\n`);
+        });
+        sock.on("end", () => res(d)); sock.on("error", rej);
+      });
+      assert.match(tunnel, /^HTTP\/1\.1 200 Connection Established/); assert.match(tunnel, /hallo van tunnel\.test/);
+      // Onvindbaar doel: nette 502, geen verbinding naar iets anders.
+      await req("/__rules", { method: "POST", body: [{ host: "gone.example.test", ip: "does-not-exist.invalid" }] });
+      const gone = await new Promise((res) => {
+        const r = http.request({ host: "127.0.0.1", port, method: "GET", path: `http://gone.example.test:${sport}/`, headers: { Host: "gone.example.test" } }, (resp) => res(resp.statusCode));
+        r.end();
+      });
+      assert.equal(gone, 502);
+    } finally { site.close(); await req("/__rules", { method: "POST", body: [] }); }
+  });
 } finally {
   helper.kill();
 }
