@@ -1,6 +1,18 @@
-# Plan: helper zonder Node.js (nog niet gebouwd)
+# Plan: helper zonder Node.js
 
-Status: **alleen plan**. Eerst beslissen over code signing; daarna bouwen.
+Status (12 november 2026): **gebouwd**, nog niet ondertekend. Wat er afwijkt van het plan hieronder:
+- Node SEA via `node --build-sea` (Node 25.5+) met `"executable"` in de config: alle platforms vanaf één Mac,
+  geen postject en geen CI-matrix nodig om te bouwen (wel voor ondertekenen op Windows). Basis: Node LTS v26.13.1.
+- Geen "verwachte SHA-256 in de extensie": de release bevat `SHA256SUMS` en de welkomstpagina linkt ernaar;
+  een hash in de extensie zou bij elke helper-release een nieuwe extensieversie vragen.
+- Geen kort setup-commando voor de binary: de binary **koppelt zelf** met een 6-cijferige code die de gebruiker
+  in de extensie typt (`/__pair`), en installeert zichzelf (`--install`). Het geheim staat dus nooit in een
+  commando of URL. De Node-route blijft als "Geavanceerd: met Node.js".
+- macOS: zip met een genotariseerde binary (stapling kan niet op een losse binary; Gatekeeper controleert online).
+- Grootte: macOS-zip ca. 42–44 MB, Linux tar.gz 45 MB, Windows-exe 96 MB (ongecomprimeerd geleverd voor dubbelklikken).
+
+Zie `README.md` (Helper als losse binary), `store/SIGNING.md` (certificaten, kosten, bouwen) en
+`.github/workflows/release-helper.yml`. Hieronder het oorspronkelijke plan.
 
 ## Waarom
 De helper vraagt nu Node.js. Voor niet-ontwikkelaars is dat de grootste drempel. Een losse binary per platform haalt die stap weg.

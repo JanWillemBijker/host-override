@@ -1,0 +1,134 @@
+# Bouwt de Host Override helper-binaries voor alle platforms bij een tag (v*) en zet ze bij een GitHub-release.
+# Ondertekenen gebeurt alleen als de secrets er zijn; anders ongetekende binaries (met waarschuwing in de log).
+# Zie store/SIGNING.md voor welke secrets je aanmaakt.
+#   macOS : APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_DEV_ID, APPLE_TEAM_ID, APPLE_ID, APPLE_APP_PASSWORD
+#   Windows (Azure Artifact Signing): AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#           AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
+#   Windows (eigen .pfx, alleen als je CA dat nog levert): WIN_CERT_PFX_BASE64, WIN_CERT_PASSWORD
+name: release-helper
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14 # Apple silicon; bouwt arm64 en x64
+    env:
+      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_DEV_ID: ${{ secrets.APPLE_DEV_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Developer ID-certificaat in een tijdelijke sleutelhanger
+        if: env.APPLE_CERT_P12_BASE64 != ''
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(openssl rand -hex 16)"
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Bouwen (ondertekenen + notariseren als de secrets er zijn)
+        run: |
+          [ -n "$APPLE_DEV_ID" ] || unset APPLE_DEV_ID
+          ./build-helper.sh --targets macos-arm64,macos-x64
+      - name: Tests tegen de arm64-binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" && cd "$RUNNER_TEMP/bin" && unzip -q "$GITHUB_WORKSPACE/dist/helper/host-override-helper-macos-arm64.zip"
+          cd "$GITHUB_WORKSPACE" && HELPER_BIN="$RUNNER_TEMP/bin/host-override-helper" node tests/run.mjs
+      - uses: actions/upload-artifact@v4
+        with: { name: helper-macos, path: "dist/helper/host-override-helper-macos-*.zip", if-no-files-found: error }
+
+  windows:
+    runs-on: windows-latest
+    env:
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+      WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: .pfx klaarzetten (optioneel)
+        if: env.WIN_CERT_PFX_BASE64 != ''
+        run: echo "$WIN_CERT_PFX_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.pfx" && echo "WIN_CERT_PATH=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
+      - name: signtool (Windows SDK) op het PATH
+        run: |
+          d=$(ls -d "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64 2>/dev/null | sort -V | tail -1)
+          [ -n "$d" ] && cygpath -w "$d" >> "$GITHUB_PATH" || echo "signtool niet gevonden"
+      - name: Bouwen
+        run: ./build-helper.sh --targets windows-x64
+      - name: Ondertekenen met Azure Artifact Signing
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        uses: azure/artifact-signing-action@v1 # controleer bij de eerste run de actuele versie/inputs op github.com/Azure/artifact-signing-action
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: dist/helper
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Rooktest
+        run: ./dist/helper/host-override-helper-windows-x64.exe --version
+      - name: .pfx opruimen
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cert.pfx"
+      - uses: actions/upload-artifact@v4
+        with: { name: helper-windows, path: dist/helper/host-override-helper-windows-x64.exe, if-no-files-found: error }
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Bouwen
+        run: ./build-helper.sh --targets linux-x64
+      - name: Tests tegen de binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" && tar -xzf dist/helper/host-override-helper-linux-x64.tar.gz -C "$RUNNER_TEMP/bin"
+          HELPER_BIN="$RUNNER_TEMP/bin/host-override-helper" node tests/run.mjs
+      - uses: actions/upload-artifact@v4
+        with: { name: helper-linux, path: dist/helper/host-override-helper-linux-x64.tar.gz, if-no-files-found: error }
+
+  release:
+    needs: [macos, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: SHA256SUMS
+        working-directory: out
+        run: sha256sum host-override-helper-* | tee SHA256SUMS
+      - name: Release aanmaken of bijwerken
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Host Override $TAG" \
+                 --notes "Helper zonder Node.js. Download het bestand voor jouw systeem en open het; de helper toont een koppelcode die je in de extensie typt. Controleer de download met SHA256SUMS."
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber

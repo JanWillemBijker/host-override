@@ -94,7 +94,8 @@ async function nodeBinary(target) {
   if (!want || want !== sha256(archive)) { fs.rmSync(archive); throw new Error(`Controlegetal klopt niet voor ${file}`); }
   const member = `${base}/${t.exe}`;
   if (t.archive === "zip") {
-    if (process.platform === "win32") sh("tar", ["-xf", archive, "-C", dir, "--strip-components=1", member]);
+    // Windows: de ingebouwde bsdtar (leest zip); de GNU tar van Git Bash kan dat niet.
+    if (process.platform === "win32") sh(path.join(env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", archive, "-C", dir, "--strip-components=1", member]);
     else sh("unzip", ["-q", "-j", "-o", archive, member, "-d", dir]);
   } else sh("tar", ["-xf", archive, "-C", dir, `--strip-components=${t.exe.split("/").length}`, member]);
   if (t.os === "win32") stripAuthenticode(exe); // handtekening van de OpenJS Foundation klopt na het inbakken niet meer

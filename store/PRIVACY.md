@@ -14,7 +14,7 @@ Host Override is gemaakt door BijBijker (https://bijbijker.nl).
 - De helper bewaart een kopie van je regels, het ID van de extensie en dezelfde geheime sleutel in je eigen thuismap (`~/.host-override/rules.json` en `config.json`, alleen leesbaar voor jouw gebruikersaccount).
 
 ### De lokale helper
-De helper is een klein programma uit het pakket van de extensie dat je zelf installeert. Het draait alleen op je eigen computer en luistert alleen op 127.0.0.1. Opdrachten (regels, DNS-check, testvenster) voert het alleen uit als ze een geheime sleutel bevatten die alleen deze extensie en jouw helper kennen; die sleutel wordt bij de eerste start willekeurig aangemaakt en via het setup-commando dat je zelf plakt in de helper gezet. Voordat de extensie iets naar de helper stuurt, moet de helper bewijzen dat hij die sleutel kent. Zonder geldige sleutel weigert de helper alle opdrachten. De helper stuurt verkeer voor domeinen op je lijst naar het IP dat jij hebt opgegeven en neemt geen contact op met de maker. De sleutel verlaat je computer niet.
+De helper is een klein programma dat je zelf installeert: als losse download (van de GitHub-releases van het project; de extensie toont alleen de link en downloadt of start zelf niets) of vanuit de broncode in het pakket van de extensie met Node.js. Het draait alleen op je eigen computer en luistert alleen op 127.0.0.1. Opdrachten (regels, DNS-check, testvenster) voert het alleen uit als ze een geheime sleutel bevatten die alleen deze extensie en jouw helper kennen; die sleutel wordt bij de eerste start willekeurig aangemaakt en komt in de helper via het setup-commando dat je zelf plakt, of doordat je de koppelcode die de helper toont in de extensie typt (de extensie stuurt de sleutel dan eenmalig naar de helper op je eigen computer). De download bevat geen telemetrie en de helper zoekt niet zelf naar updates. GitHub (de downloadsite) kan bij het downloaden, zoals elke website, je IP-adres en browsergegevens zien; zie het privacybeleid van GitHub. Voordat de extensie iets naar de helper stuurt, moet de helper bewijzen dat hij die sleutel kent. Zonder geldige sleutel weigert de helper alle opdrachten. De helper stuurt verkeer voor domeinen op je lijst naar het IP dat jij hebt opgegeven en neemt geen contact op met de maker. De sleutel verlaat je computer niet.
 
 ### Hosts-bestand
 Met de helper kijkt Host Override of een site in het hosts-bestand van je computer staat (`/etc/hosts` op macOS en Linux, `%SystemRoot%\System32\drivers\etc\hosts` op Windows). De helper leest dat bestand alleen (hooguit 5 MB) en schrijft er nooit in. De treffers worden alleen in de extensie getoond (popup, DNS-check, overzicht onder Meer, badge en indicator). Er gaat niets van je computer af.
@@ -40,7 +40,7 @@ Als je "IP-weergave inschakelen" kiest, geef je de extensie optioneel toegang to
 - **Testvenster:** de helper start op jouw klik een tweede Chrome-venster met een eigen profiel (`~/chrome-test`).
 
 ### Verwijderen
-Verwijder de extensie via chrome://extensions. De helper en zijn bestanden verwijder je met het meegeleverde script (`uninstall.sh` of `helper/uninstall.ps1`).
+Verwijder de extensie via chrome://extensions. De helper en zijn bestanden verwijder je met `host-override-helper --uninstall` (download) of het meegeleverde script (`uninstall.sh` of `helper/uninstall.ps1`).
 
 ### Contact
 BijBijker – https://bijbijker.nl (contactadres: zie de website).
@@ -55,7 +55,7 @@ BijBijker – https://bijbijker.nl (contactadres: zie de website).
 - The helper keeps a copy of your rules, the extension ID and the same secret key in your home folder (`~/.host-override/rules.json` and `config.json`, readable only by your user account).
 
 ### The local helper
-The helper is a small program from the extension package that you install yourself. It runs only on your own computer and listens only on 127.0.0.1. It only carries out commands (rules, DNS check, test window) that include a secret key that only this extension and your helper know; the key is generated randomly on first run and put into the helper by the setup command you paste yourself. Before the extension sends anything to the helper, the helper must prove it knows that key. Without a valid key the helper refuses all commands. The helper routes traffic for the domains on your list to the IP you entered and never contacts the developer. The key never leaves your computer.
+The helper is a small program you install yourself: as a separate download (from the project's GitHub releases; the extension only shows the link and never downloads or starts anything itself) or from the source code inside the extension package using Node.js. It runs only on your own computer and listens only on 127.0.0.1. It only carries out commands (rules, DNS check, test window) that include a secret key that only this extension and your helper know; the key is generated randomly on first run and reaches the helper through the setup command you paste yourself, or when you type the pairing code shown by the helper into the extension (the extension then sends the key once to the helper on your own computer). The download contains no telemetry and the helper does not check for updates by itself. Like any website, GitHub (the download site) can see your IP address and browser details when you download; see GitHub's privacy policy. Before the extension sends anything to the helper, the helper must prove it knows that key. Without a valid key the helper refuses all commands. The helper routes traffic for the domains on your list to the IP you entered and never contacts the developer. The key never leaves your computer.
 
 ### Hosts file
 With the helper, Host Override checks whether a site is listed in your computer's hosts file (`/etc/hosts` on macOS and Linux, `%SystemRoot%\System32\drivers\etc\hosts` on Windows). The helper only reads that file (at most 5 MB) and never writes to it. Matches are shown only inside the extension (popup, DNS check, overview under More, badge and indicator). Nothing leaves your computer.
@@ -81,7 +81,7 @@ If you choose "Enable IP display" you optionally grant access to all sites. It i
 - **Test window:** on your click, the helper starts a second Chrome window with its own profile (`~/chrome-test`).
 
 ### Removal
-Remove the extension via chrome://extensions. Remove the helper and its files with the bundled script (`uninstall.sh` or `helper/uninstall.ps1`).
+Remove the extension via chrome://extensions. Remove the helper and its files with `host-override-helper --uninstall` (download) or the bundled script (`uninstall.sh` or `helper/uninstall.ps1`).
 
 ### Contact
 BijBijker – https://bijbijker.nl (contact details on the website).

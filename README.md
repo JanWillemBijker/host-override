@@ -5,24 +5,26 @@ Stuur in één Chrome-profiel een domein naar een ander IP (bijvoorbeeld een tes
 ## Hoe het werkt
 
 - De **extensie** zet een proxy-regel die alleen voor het gewone profiel geldt. Alleen domeinen uit je lijst gaan via de helper, de rest gaat direct.
-- De **helper** (een klein lokaal Node-programma, alleen bereikbaar op 127.0.0.1) maakt verbinding met het IP dat je opgaf. Hostnaam en certificaat blijven gelijk, dus HTTPS werkt.
+- De **helper** (een klein lokaal programma, alleen bereikbaar op 127.0.0.1; als losse download of vanuit de broncode met Node.js) maakt verbinding met het IP dat je opgaf. Hostnaam en certificaat blijven gelijk, dus HTTPS werkt.
 - **Incognito** gebruikt die proxy-regel niet, dus daar zie je de live site.
 
 Een extensie kan geen IP-adressen koppelen zonder zo'n helper. Daarom is er eenmalig één stap buiten Chrome nodig. Die zit ingebouwd in de extensie.
 
 ## Installeren
 
-Je hebt [Node.js](https://nodejs.org) nodig.
-
 1. Ga in Chrome naar `chrome://extensions`, zet **Ontwikkelaarsmodus** aan, kies **Uitgepakte extensie laden** en selecteer de map `extension/` (de map met `manifest.json`).
-2. Er opent een welkomstpagina. Kies je systeem, klik **Kopieer setup-commando**, plak het in Terminal (macOS/Linux) of PowerShell (Windows) en druk op Enter. De pagina meldt zodra de helper actief is.
+2. Er opent een welkomstpagina. Twee manieren om de helper te installeren:
+   - **Download (geen Node.js nodig, aanbevolen):** klik **Download** voor je systeem (macOS Apple silicon/Intel, Windows x64, Linux x64), open het bestand. Er verschijnt een venster met een **koppelcode van 6 cijfers**; typ die op de welkomstpagina (of in de popup) en klik **Koppel**. De helper kopieert zichzelf naar `~/.host-override/bin/` en start voortaan bij inloggen.
+     Zolang de binaries niet ondertekend zijn: macOS > Systeeminstellingen > Privacy en beveiliging > **Toch openen**; Windows > **Meer info** > **Toch uitvoeren**. Zie `store/SIGNING.md`.
+   - **Geavanceerd: met Node.js:** klik **Kopieer setup-commando**, plak het in Terminal (macOS/Linux) of PowerShell (Windows) en druk op Enter. Werkt zonder download, vanuit de broncode in de extensie.
+   De pagina meldt zodra de helper actief is.
 3. Pin het icoon via de puzzelknop.
 
 Laat "Toestaan in incognito" uit (standaard uit).
 
 De helper start voortaan zelf bij inloggen (macOS: LaunchAgent, Linux: systemd-gebruikersservice of autostart, Windows: Opstarten-map).
 
-Het setup-commando bevat een geheime sleutel die de extensie bij de eerste start aanmaakt. Het commando schrijft die met het extensie-ID in `~/.host-override/config.json` (alleen leesbaar voor jou). De helper voert alleen opdrachten uit die die sleutel meesturen, en bewijst bij elke statuscontrole dat hij de sleutel kent; anders stuurt de extensie hem niets. Zonder geldige `config.json` weigert de helper alles.
+De extensie maakt bij de eerste start een geheime sleutel aan. Het setup-commando, of het koppelen met de code, schrijft die met het extensie-ID in `~/.host-override/config.json` (alleen leesbaar voor jou). De helper voert alleen opdrachten uit die die sleutel meesturen, en bewijst bij elke statuscontrole dat hij de sleutel kent; anders stuurt de extensie hem niets. Zonder geldige `config.json` weigert de helper alles.
 
 Vanuit deze map kan het ook met `./install.sh <extensie-id> <geheim>` (macOS/Linux), maar het geheim staat alleen in de extensie: het setup-commando plakken is eenvoudiger. `./install.sh` zonder argumenten laat een bestaande `config.json` staan. Windows: `extension/helper/setup.ps1` na het plakken van het setup-commando.
 
@@ -81,9 +83,25 @@ Sectie **Migratie-check**, op klik: vergelijkt live met de nieuwe server (je reg
 
 `POST /__hosts` met `{"names": ["a.nl"]}` geeft alleen de treffers voor die namen (max 50); `{}` geeft een compact overzicht (overrides tot 1000 regels, blokkeringen alleen geteld met een voorbeeld van 50). `GET /__hosts?names=…` mag ook, maar de extensie gebruikt POST omdat Chrome bij GET geen Origin-header meestuurt. Zelfde controles als de andere opdrachten (geheim, Origin, Host). Het bestand wordt hooguit tot 5 MB gelezen (daarboven alleen het begin, `truncated: true`) en gecachet op grootte en wijzigingstijd. De helper-versie blijft 6: dit endpoint is een uitbreiding, een oudere v6-helper zonder `/__hosts` levert gewoon geen hosts-informatie op.
 
+## Helper als losse binary (zonder Node.js)
+
+`./build-helper.sh` bundelt `extension/helper/proxy.js`, `dnstools.js` en `helper-bin/service.js` en bakt ze met `node --build-sea` (Node Single Executable Application) in de officiële Node-LTS-binary (versie vast in `helper-bin/build-helper.mjs`, gedownload van nodejs.org en gecontroleerd met SHA-256). Vanaf een Mac komen alle platforms in één keer (`--targets` om te kiezen, `--universal` voor een universele macOS-binary van ca. 280 MB). Uitvoer in `dist/helper/` (gitignored, nooit in de extensie-zip): `host-override-helper-macos-arm64.zip`, `-macos-x64.zip`, `-windows-x64.exe`, `-linux-x64.tar.gz` (40–95 MB) en `SHA256SUMS`. Ondertekenen en notariseren gaan automatisch als de omgevingsvariabelen gezet zijn; anders een ongetekende build met waarschuwing. Alles over certificaten en kosten: `store/SIGNING.md`. Bij een tag `v*` bouwt `.github/workflows/release-helper.yml` alles en zet het bij de GitHub-release; de extensie linkt naar `HELPER_RELEASES` in `extension/common.js`.
+
+Opties van de binary:
+
+| | |
+| --- | --- |
+| (geen) | instellen: toont een koppelcode, wacht tot je die in de extensie typt, kopieert zichzelf naar `~/.host-override/bin/` en zet automatisch starten aan (LaunchAgent / systemd-gebruikersservice of autostart / Opstarten-map, dezelfde namen als de Node-route, die hij dus vervangt). Draait er al een helper, dan loopt het koppelen via die helper. |
+| `--pair` | koppelvenster met een nieuwe code, blijft daarna draaien |
+| `--serve` | alleen draaien (zo start de dienst hem) |
+| `--install` / `--uninstall` | automatisch starten aan / uit (uninstall verwijdert ook `~/.host-override`) |
+| `--version`, `--help` | |
+
+**Koppelen (`POST /__pair`):** alleen tijdens een koppelvenster. De code (6 cijfers, `crypto.randomInt`) geldt 5 minuten en één keer; na 5 foute pogingen sluit het venster. Zelfde controles als de andere opdrachten (Host `127.0.0.1`/`localhost`, Origin `chrome-extension://…`, header `X-Host-Override`); het extensie-ID komt uit de Origin. `config.json` wordt atomisch geschreven (0600, map 0700). Buiten een koppelvenster: 410. `/__status` meldt `pairing`, `kind` (`bin`/`node`) en feature `pair`. Restrisico: de extensie stuurt het geheim mee met de code; draait er op dat moment een ander programma op poort 8899 dat zich als helper voordoet, dan ontvangt dat het geheim. Daarvoor moet er al vreemde software op je computer draaien, en de code ziet alleen de echte helper; de extensie stuurt pas iets als de helper een open koppelvenster meldt.
+
 ## Testen
 
-`node tests/run.mjs` test de hosts-parser, de beslisregels, de indicator-instellingen, groepen/notities/hosts-formaat, headers (declarativeNetRequest), verbindingen, abonnementen, sync, back-up en DoH-wire-formaat, en start een eigen helper op een vrije poort met een tijdelijke HOME en een nep-hosts-bestand. Daarvoor leest de helper de omgevingsvariabelen `HOST_OVERRIDE_HOSTS_FILE` en `HOST_OVERRIDE_TEST_PORTS` (alleen voor tests; de extensie kan die niet zetten en de setup-scripts doen dat niet). Met `NET=1` lopen ook netwerktests mee (crt.sh, RDAP). Een draaiende helper op poort 8899 en `~/.host-override` worden niet aangeraakt.
+`node tests/run.mjs` test de hosts-parser, de beslisregels, de indicator-instellingen, groepen/notities/hosts-formaat, headers (declarativeNetRequest), verbindingen, abonnementen, sync, back-up en DoH-wire-formaat, en start een eigen helper op een vrije poort met een tijdelijke HOME en een nep-hosts-bestand. Daarvoor leest de helper de omgevingsvariabelen `HOST_OVERRIDE_HOSTS_FILE` en `HOST_OVERRIDE_TEST_PORTS` (alleen voor tests; de extensie kan die niet zetten en de setup-scripts doen dat niet). Met `NET=1` lopen ook netwerktests mee (crt.sh, RDAP). Koppelen (verkeerde code, eenmalig, verlopen via `HOST_OVERRIDE_PAIR_TTL`, 5 pogingen, 0600, `pair.json`) en `--install`/`--uninstall` (droog, `HO_DRY_INSTALL=1`, per platform) worden ook getest. Met `HELPER_BIN=pad/naar/host-override-helper node tests/run.mjs` lopen dezelfde helpertests tegen de gebouwde binary. Een draaiende helper op poort 8899 en `~/.host-override` worden niet aangeraakt.
 
 ## Delen en Chrome Web Store
 
@@ -96,8 +114,9 @@ De extensie bevat alles (ook de helper), dus delen is alleen de extensie delen.
 
 | Melding | Oplossing |
 | --- | --- |
-| "Helper draait niet" | Plak het setup-commando opnieuw (uit de popup of welkomstpagina). Controle: open `http://127.0.0.1:8899` |
-| "Helper-update beschikbaar" of "Helper moet opnieuw worden ingesteld" | Kopieer het setup-commando uit de popup en plak het nog één keer. Blijft de melding, kijk dan wat er op poort 8899 draait (`lsof -i :8899`). Tot het is opgelost gaan domeinen op je lijst nergens heen (foutmelding in plaats van een verkeerde server). |
+| "Helper draait niet" | Open de gedownloade helper opnieuw en typ de code, of plak het setup-commando opnieuw (uit de popup of welkomstpagina). Controle: open `http://127.0.0.1:8899` |
+| "Code klopt niet" / "wacht niet op een code" | De code geldt 5 minuten, één keer, max. 5 pogingen. Open de helper opnieuw voor een nieuwe code. |
+| "Helper-update beschikbaar" of "Helper moet opnieuw worden ingesteld" | Open de gedownloade helper opnieuw en typ de nieuwe code, of kopieer het setup-commando uit de popup en plak het nog één keer. Blijft de melding, kijk dan wat er op poort 8899 draait (`lsof -i :8899`). Tot het is opgelost gaan domeinen op je lijst nergens heen (foutmelding in plaats van een verkeerde server). |
 | "Een andere extensie beheert de proxy" | Zet andere proxy- of VPN-extensies uit |
 | Certificaatfout | De testserver moet een geldig certificaat voor dat domein hebben |
 | Oude site blijft staan | Hard verversen of tab sluiten en opnieuw openen |
@@ -107,7 +126,7 @@ Logs: macOS `~/Library/Logs/host-override.log`, Linux `journalctl --user -u host
 
 ## Verwijderen
 
-macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Verwijder daarna de extensie in `chrome://extensions`.
+Binary: `~/.host-override/bin/host-override-helper --uninstall` (Windows: `%USERPROFILE%\.host-override\bin\host-override-helper.exe --uninstall`). Node-route: macOS en Linux `./uninstall.sh`, Windows `extension/helper/uninstall.ps1`. Verwijder daarna de extensie in `chrome://extensions`.
 
 ## Beperkingen
 
@@ -116,7 +135,8 @@ macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Ver
 - Het IP geldt voor alle poorten van dat domein.
 - Het "registreerbare domein" (voor "nog live" en de migratie-check) wordt bij benadering bepaald, zonder volledige Public Suffix List.
 - Headers per groep werken alleen op hosts waarvoor de extensie toegang heeft; bij navigatie vanaf een andere site is toegang tot alle sites nodig.
-- Een helper zonder Node.js is nog niet gebouwd; zie `store/HELPER-ZONDER-NODE.md`.
+- De helper-binaries zijn nog niet ondertekend (geen certificaten); zie `store/SIGNING.md`. Getest: macOS arm64 (binary door de volledige testsuite, instellen en koppelen end-to-end met droge installatie). Windows- en Linux-binaries zijn gebouwd maar nog niet op die systemen gestart (CI draait de tests op Linux).
+- De binaries zijn groot (40–45 MB gezipt, Windows-exe 95 MB): de volledige Node-runtime zit erin.
 - In incognito is de extensie uit, dus daar zie je geen IP-kaart.
 
 
