@@ -242,7 +242,6 @@ export const EN = {
  "Wijkt licht af": "Differs slightly",
  "Wijkt af van DNS": "Differs from DNS",
  "Geen regel": "No rule",
- "{ip} (via de helper)": "{ip} (via the helper)",
  "niet in publieke DNS": "not in public DNS",
  "Verbonden": "Connected",
  "Bron: Host Override-regel. Alleen dit Chrome-profiel; incognito toont de live site.": "Source: Host Override rule. This Chrome profile only; incognito shows the live site.",

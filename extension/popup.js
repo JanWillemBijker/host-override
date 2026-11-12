@@ -176,7 +176,13 @@ async function renderSite(state) {
   pill.style.background = r.source === "rule" && ruleGroup ? ruleGroup.color : "";
 
   // Verbonden: het IP waar Chrome mee praat. Live IP: wat publieke DNS zegt.
-  $("connIp").textContent = rule ? t("{ip} (via de helper)", { ip: resIp ? `${rule.ip} → ${resIp}` : rule.ip }) : seen || (granted ? t("Ververs de pagina") : "-");
+  // Met een regel: het doel (IP of hostnaam) op één regel, "via de helper" als los label en bij een hostnaam het opgezochte IP eronder.
+  const connText = rule ? rule.ip : seen || (granted ? t("Ververs de pagina") : "-");
+  $("connIp").textContent = connText;
+  $("connIp").title = rule || seen ? connText : "";
+  $("connIp").classList.toggle("isHost", !!rule && isTargetHost(rule.ip));
+  $("connSub").hidden = !rule;
+  $("connRes").textContent = resIp ? "→ " + resIp : "";
   const pub = doh?.status === "ok" ? doh.ips : null;
   const live = pub ? pub[0] : store[liveKey] || null;
   $("liveIp").textContent = pub ? (pub.length > 1 ? `${pub[0]} +${pub.length - 1}` : pub[0]) : doh ? t("niet in publieke DNS") : live || "-";
@@ -280,7 +286,9 @@ async function mutateGroups(fn, extra = {}) {
 
 function ruleRow(r, state) {
   const own = !r.readOnly;
-  const row = h("div", { class: "rule" + (r.enabled === false ? " off" : "") + (own ? "" : " ro") });
+  // Lange doelen (hostnaam, IPv6) krijgen een eigen regel onder de host, zodat ze niet afgekapt worden.
+  const wide = r.ip.length > 15;
+  const row = h("div", { class: "rule" + (r.enabled === false ? " off" : "") + (own ? "" : " ro") + (wide ? " wide" : "") });
   const cb = h("input", { type: "checkbox", title: t("Regel aan of uit"), "aria-label": t("Regel aan of uit") + ": " + r.host });
   cb.checked = r.enabled !== false;
   cb.disabled = !own;
@@ -288,16 +296,19 @@ function ruleRow(r, state) {
 
   const cell = h("div", { class: "hostcell" }, h("span", { class: "host" }, r.host));
   if (r.note) cell.append(h("span", { class: "rnote", title: r.note }, r.note));
+  let resEl = null;
   if (isTargetHost(r.ip)) {
     const res = resolved.get(r.ip);
-    cell.append(h("span", { class: "rres" + (res?.error ? " bad" : "") },
-      res ? (res.ips?.length ? "→ " + res.ips.slice(0, 2).join(", ") : t("niet gevonden ({e})", { e: res.error || "?" })) : t("IP opzoeken...")));
+    resEl = h("span", { class: "rres" + (res?.error ? " bad" : "") },
+      res ? (res.ips?.length ? "→ " + res.ips.slice(0, 2).join(", ") : t("niet gevonden ({e})", { e: res.error || "?" })) : t("IP opzoeken..."));
+    if (!wide) cell.append(resEl);
   }
 
   let target;
   if (own) {
     target = h("input", { type: "text", spellcheck: "false", title: t("IP of hostnaam aanpassen"), "aria-label": t("IP of hostnaam aanpassen") + ": " + r.host });
     target.value = r.ip;
+    target.title = r.ip;
     target.onchange = () => {
       const v = target.value.trim().toLowerCase();
       if (!isTarget(v)) { target.value = r.ip; errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
@@ -312,6 +323,7 @@ function ruleRow(r, state) {
   const del = h("button", { class: "del", title: t("Verwijderen"), "aria-label": t("Verwijderen") + ": " + r.host, hidden: !own }, "×");
   del.onclick = () => mutateRules((rules) => rules.filter((x) => x.host !== r.host));
   row.append(cb, cell, target, more, del);
+  if (wide && resEl) row.append(resEl); // opgezocht IP onder het doel
   if (!own || editRule !== r.host) return [row];
 
   // Notitie en groep (verplaatsen) onder de regel.

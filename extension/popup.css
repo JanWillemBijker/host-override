@@ -143,7 +143,12 @@ details.sec > .cmp { padding: 0 12px 6px; }
 .siteTop { gap: 8px; }
 .siteHost { margin: 0; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .liveRow { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
-.liveRow code { font-size: 15px; flex: 1; overflow-wrap: anywhere; }
+.liveRow .connVal { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.liveRow code { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.liveRow code.isHost { font-size: 13px; }
+.connSub { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.connRes { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.via { flex: none; font-size: 10.5px; font-weight: 600; color: var(--muted); background: var(--field); border: 1px solid var(--line); border-radius: 9px; padding: 0 7px; white-space: nowrap; }
 body.side { width: auto; min-width: 320px; max-width: none; min-height: 100vh; }
 
 /* Credit onderaan: subtiel maar zichtbaar, in popup en zijpaneel. */
@@ -237,7 +242,16 @@ form .note { grid-column: 1 / -1; }
 form #addGroup:not([hidden]) { grid-column: 1 / -1; margin: 0; }
 form:has(#addGroup:not([hidden])) .note { grid-column: 1; }
 form:has(#addGroup:not([hidden])) #addGroup { grid-column: 2; }
-.rule { grid-template-columns: auto minmax(0, 1fr) 112px 22px 22px; gap: 4px; }
+.rule { grid-template-columns: auto minmax(0, 1fr) 120px 22px 22px; gap: 4px; }
+.rule > input[type=text] { padding: 5px 6px; text-overflow: ellipsis; }
+/* Lang doel (hostnaam, IPv6): host over de volle breedte, doel eronder over dezelfde breedte. */
+.rule.wide { row-gap: 3px; }
+.rule.wide .hostcell { grid-column: 2 / 4; grid-row: 1; }
+.rule.wide > input[type=text], .rule.wide > .rotarget { grid-column: 2 / 4; grid-row: 2; }
+.rule.wide > .more { grid-column: 4; grid-row: 1; }
+.rule.wide > .del:not(.more) { grid-column: 5; grid-row: 1; }
+.rule.wide > input[type=checkbox] { grid-row: 1; }
+.rule.wide > .rres { grid-column: 2 / 4; grid-row: 3; margin-top: -1px; }
 .rule .del { width: 22px; }
 .rule .hostcell .host { overflow-wrap: anywhere; }
 .geditor .field input[type=text] { font: inherit; }
@@ -285,3 +299,21 @@ table.mig th { text-align: left; font-weight: 600; color: var(--fg); font-size: 
 table.mig td { font-size: 11.5px; }
 table.mig tr.still td { background: var(--warnbg); }
 #dMig .find li { align-items: flex-start; }
+
+/* Smal zijpaneel: tabs op één regel, en elke regel met het doel onder de host (geen afgebroken hostnamen). */
+.tab { flex: 1 1 auto; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.liveRow { align-items: baseline; }
+@media (max-width: 360px) {
+  .tab { font-size: 12px; padding: 7px 2px; }
+  .rule { row-gap: 3px; }
+  .rule .hostcell { grid-column: 2 / 4; grid-row: 1; }
+  .rule > input[type=text], .rule > .rotarget { grid-column: 2 / 4; grid-row: 2; }
+  .rule > .more { grid-column: 4; grid-row: 1; }
+  .rule > .del:not(.more) { grid-column: 5; grid-row: 1; }
+  .rule > .rres { grid-column: 2 / 4; grid-row: 3; }
+  form { grid-template-columns: 1fr; }
+  form:has(#addGroup:not([hidden])) .note, form:has(#addGroup:not([hidden])) #addGroup { grid-column: 1; }
+}
+/* Migratie-check: kopnamen als X-Content-Type-Options niet midden in het woord afbreken. */
+table.mig tbody th { white-space: nowrap; font-size: 10.5px; }
+.crow .b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
