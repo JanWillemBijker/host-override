@@ -394,14 +394,26 @@ const EXT_ID = "abcdefghijklmnopabcdefghijklmnop";
 const ORIGIN = `chrome-extension://${EXT_ID}`;
 const HOSTS = path.join(tmp, "hosts");
 fs.writeFileSync(HOSTS, sample);
-const port = await new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
+const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
+const port = await freePort();
+// Server-check-tests: de helper gebruikt deze poorten i.p.v. 80/443 (HOST_OVERRIDE_TEST_PORTS, alleen omgeving).
+const checkHttp = http.createServer((q, s) => {
+  const host = (q.headers.host || "").toLowerCase();
+  if (host === "a.test") { s.writeHead(301, { Location: "http://www.a.test/start?x=1" }); return s.end(); }
+  if (host === "www.a.test" && q.url === "/start?x=1") { s.writeHead(302, { Location: "/home" }); return s.end(); }
+  if (host === "www.a.test" && q.url === "/home") { s.writeHead(200, { "Strict-Transport-Security": "max-age=1", "X-Frame-Options": "DENY", Server: "test" }); return s.end("ok"); }
+  if (host === "ext.test") { s.writeHead(302, { Location: "https://elders.example/" }); return s.end(); }
+  s.writeHead(404).end();
+});
+await new Promise((r) => checkHttp.listen(0, "127.0.0.1", r));
+const deadPort = await freePort();
 assert.notEqual(port, 8899);
 
 function startHelper(withConfig = true) {
   if (withConfig) fs.writeFileSync(path.join(home, ".host-override", "config.json"), JSON.stringify({ origins: [ORIGIN], secret: SECRET }));
   else fs.rmSync(path.join(home, ".host-override", "config.json"), { force: true });
   const child = spawn(process.execPath, [path.join(EXT, "helper", "proxy.js")], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, PORT: String(port), HOST_OVERRIDE_HOSTS_FILE: HOSTS },
+    env: { ...process.env, HOME: home, USERPROFILE: home, PORT: String(port), HOST_OVERRIDE_HOSTS_FILE: HOSTS, HOST_OVERRIDE_TEST_PORTS: `${checkHttp.address().port},${deadPort}` },
     stdio: ["ignore", "pipe", "pipe"],
   });
   return new Promise((res, rej) => {
@@ -576,6 +588,42 @@ try {
       assert.equal(gone, 502);
     } finally { site.close(); await req("/__rules", { method: "POST", body: [] }); }
   });
+  // ---------- Migratie-check: uitgebreide server-check, crt.sh, RDAP ----------
+  await test("status meldt check2, crtsh en rdap", async () => {
+    const r = await req(`/__status?nonce=${"cd".repeat(16)}`, { token: null, origin: null, marker: false });
+    for (const f of ["check2", "crtsh", "rdap"]) assert.ok(r.json.features.includes(f), f);
+  });
+  await test("/__check detail: redirectketen op hetzelfde IP (ook www), headers, extern niet gevolgd", async () => {
+    const r = await req("/__check", { method: "POST", body: { host: "a.test", ip: "127.0.0.1", detail: true } });
+    assert.equal(r.status, 200, r.text);
+    const c = r.json.httpChain;
+    assert.deepEqual(c.hops.map((x) => x.status), [301, 302, 200]);
+    assert.equal(c.hops[1].url, "http://www.a.test/start?x=1");
+    assert.equal(c.final.headers["strict-transport-security"], "max-age=1");
+    assert.equal(c.final.headers["x-frame-options"], "DENY");
+    assert.equal(r.json.https.ok, false, "https-poort dicht");
+    const e = await req("/__check", { method: "POST", body: { host: "ext.test", ip: "127.0.0.1", detail: true } });
+    assert.equal(e.json.httpChain.hops.length, 2); assert.ok(e.json.httpChain.hops[1].external);
+    const plain = await req("/__check", { method: "POST", body: { host: "a.test", ip: "127.0.0.1" } });
+    assert.equal(plain.json.httpChain, undefined, "zonder detail geen keten (zoals voorheen)");
+  });
+  await test("/__crtsh en /__rdap: alleen met geheim, strikte domeinnaam", async () => {
+    for (const p of ["/__crtsh", "/__rdap"]) {
+      assert.equal((await req(p, { method: "POST", body: { domain: "example.com" }, token: null })).status, 403, p);
+      assert.equal((await req(p, { method: "POST", body: { domain: "example.com" }, host: `evil.example:${port}` })).status, 403, p);
+      for (const bad of ["*.example.com", "example", "a b.com", "x.com/../../etc", "%.example.com", "", 5]) {
+        assert.equal((await req(p, { method: "POST", body: { domain: bad } })).status, 400, `${p} ${bad}`);
+      }
+    }
+  });
+  if (process.env.NET) {
+    await test("(netwerk) crt.sh en RDAP voor example.com", async () => {
+      const c = await req("/__crtsh", { method: "POST", body: { domain: "example.com" } });
+      assert.equal(c.status, 200, c.text); assert.ok(c.json.names.every((n) => n === "example.com" || n.endsWith(".example.com")));
+      const d = await req("/__rdap", { method: "POST", body: { domain: "example.com" } });
+      assert.equal(d.status, 200, d.text); assert.equal(typeof d.json.dnssec, "boolean");
+    });
+  }
 } finally {
   helper.kill();
 }
@@ -591,9 +639,13 @@ await test("HOST_OVERRIDE_HOSTS_FILE komt alleen uit de omgeving van de helper",
   const src = fs.readFileSync(path.join(EXT, "helper", "proxy.js"), "utf8") + fs.readFileSync(path.join(EXT, "helper", "dnstools.js"), "utf8");
   assert.equal((src.match(/HOST_OVERRIDE_HOSTS_FILE/g) || []).length, 3, "alleen in dnstools.js (commentaar + process.env)");
   for (const f of ["setup.sh", "setup.ps1"]) assert.ok(!fs.readFileSync(path.join(EXT, "helper", f), "utf8").includes("HOST_OVERRIDE_HOSTS_FILE"));
-  for (const f of fs.readdirSync(EXT).filter((x) => x.endsWith(".js"))) assert.ok(!fs.readFileSync(path.join(EXT, f), "utf8").includes("HOST_OVERRIDE_HOSTS_FILE"), f);
+  for (const f of fs.readdirSync(EXT).filter((x) => x.endsWith(".js"))) {
+    const src = fs.readFileSync(path.join(EXT, f), "utf8");
+    assert.ok(!src.includes("HOST_OVERRIDE_HOSTS_FILE") && !src.includes("HOST_OVERRIDE_TEST_PORTS"), f);
+  }
 });
 
+checkHttp.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${passed} geslaagd, ${failed} mislukt`);
 process.exit(failed ? 1 : 0);

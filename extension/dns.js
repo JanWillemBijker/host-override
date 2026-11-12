@@ -1,5 +1,6 @@
 import { isHost, isIp, isTarget, isTargetHost, matchRule, activeRules, loadState, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
 import { t } from "./i18n.js";
+import { setMigrationContext } from "./migrate.js";
 
 const RESOLVERS = [
   ["system", "Systeem (jouw computer)"], ["1.1.1.1", "Cloudflare 1.1.1.1"], ["8.8.8.8", "Google 8.8.8.8"],
@@ -104,6 +105,10 @@ async function run(name, resolver) {
     override = ip ? { ...override, name: override.ip, ip } : null;
   }
   const sec = (s) => (l, x) => live() && addF(l, x, s);
+  // Migratie-check: domein, nieuwe server en (zodra bekend) de live IP's.
+  let readyFn;
+  const mig = { name, override, liveIps: [], group: ruleHit?.group || null, ready: new Promise((r) => (readyFn = r)) };
+  setMigrationContext(mig);
 
   // 1. Records
   const recordsP = (async () => {
@@ -288,6 +293,8 @@ async function run(name, resolver) {
     const rows = await recordsP;
     const hostsHits = await hostsP;
     const dnsIps = authA && authA.length ? authA : rows.filter((r) => r.type === "A").map((r) => r.data);
+    mig.liveIps = [...new Set(dnsIps)];
+    readyFn();
     const targets = [...new Set(dnsIps)].map((ip) => ({ ip, kind: "live" }));
     if (override && !targets.some((x) => x.ip === override.ip)) targets.push({ ip: override.ip, kind: "test" });
     else if (override) targets.find((x) => x.ip === override.ip).kind = "both";
@@ -336,7 +343,8 @@ async function run(name, resolver) {
       cards);
   })();
 
-  await Promise.all([recordsP, hostsP, nsP, propP, mailP, srvP]);
+  await Promise.allSettled([recordsP, hostsP, nsP, propP, mailP, srvP]);
+  readyFn();
 }
 
 // ---------- Rapport kopiëren ----------

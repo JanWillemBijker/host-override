@@ -244,6 +244,8 @@ async function trace(name) {
 function certInfo(socket, cert, host) {
   if (!cert || !cert.valid_to) return null;
   const to = new Date(cert.valid_to);
+  const bare = host.replace(/^www\./, "");
+  const san = (cert.subjectaltname || "").split(", ").filter((x) => x.startsWith("DNS:")).map((x) => x.slice(4));
   return {
     authorized: socket.authorized,
     authError: socket.authorizationError ? String(socket.authorizationError) : null,
@@ -252,25 +254,38 @@ function certInfo(socket, cert, host) {
     from: new Date(cert.valid_from).toISOString(),
     to: to.toISOString(),
     daysLeft: Math.floor((to - Date.now()) / 864e5),
-    san: (cert.subjectaltname || "").replace(/DNS:/g, "").split(", ").filter(Boolean).slice(0, 12),
+    san: san.slice(0, 100),
+    sanCount: san.length,
     hostMatch: !tls.checkServerIdentity(host, cert),
+    // Dekt het certificaat ook het kale domein en www? (belangrijk bij een verhuizing)
+    bareMatch: !tls.checkServerIdentity(bare, cert),
+    wwwMatch: !tls.checkServerIdentity("www." + bare, cert),
     protocol: socket.getProtocol ? socket.getProtocol() : null,
   };
 }
 
-function probe(proto, host, ip, timeout = 6000) {
+// Beveiligings- en cacheheaders die de migratie-check live en nieuw naast elkaar zet.
+const CHECK_HEADERS = ["strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options",
+  "referrer-policy", "permissions-policy", "cross-origin-opener-policy", "server", "x-powered-by", "cache-control", "content-type"];
+// Alleen voor tests: andere poorten dan 80/443 ("8080,8443"), te zetten in de omgeving van de helper, niet vanuit de extensie.
+const TEST_PORTS = (process.env.HOST_OVERRIDE_TEST_PORTS || "").split(",").map(Number);
+const portFor = (secure) => (secure ? TEST_PORTS[1] || 443 : TEST_PORTS[0] || 80);
+
+function probe(proto, host, ip, timeout = 6000, pathname = "/") {
   return new Promise((resolve) => {
     const start = Date.now();
     const secure = proto === "https";
     const opts = {
-      host: ip, port: secure ? 443 : 80, method: "GET", path: "/", timeout, agent: false,
-      headers: { Host: host, "User-Agent": "HostOverride-check", Accept: "*/*" },
+      host: ip, port: portFor(secure), method: "GET", path: pathname, timeout, agent: false,
+      headers: { Host: host, "User-Agent": "HostOverride-check", Accept: "text/html,*/*" },
     };
     if (secure) { opts.servername = host; opts.rejectUnauthorized = false; }
     const req = (secure ? https : http).request(opts, (res) => {
+      const headers = {};
+      for (const h of CHECK_HEADERS) if (res.headers[h] != null) headers[h] = String(res.headers[h]).slice(0, 300);
       const out = {
         ok: true, status: res.statusCode, location: res.headers.location || null,
-        server: res.headers.server || null, poweredBy: res.headers["x-powered-by"] || null, ms: Date.now() - start,
+        server: res.headers.server || null, poweredBy: res.headers["x-powered-by"] || null, ms: Date.now() - start, headers,
       };
       if (secure) out.tls = certInfo(res.socket, res.socket.getPeerCertificate(), host);
       res.destroy();
@@ -283,9 +298,125 @@ function probe(proto, host, ip, timeout = 6000) {
   });
 }
 
-async function check(host, ip) {
+// Doorverwijzingen volgen (max 5) tegen hetzelfde IP, zolang het doel dezelfde naam, www.naam of de kale naam is.
+// Een verwijzing naar een andere host wordt genoteerd maar niet gevolgd (die draait niet per se op deze server).
+async function chain(proto, host, ip) {
+  const bare = host.replace(/^www\./, "");
+  const same = new Set([host, bare, "www." + bare]);
+  const hops = [];
+  let cur = { proto, host, path: "/" };
+  const t0 = Date.now();
+  for (let i = 0; i < 6; i++) {
+    const r = await probe(cur.proto, cur.host, ip, 6000, cur.path);
+    hops.push({ url: `${cur.proto}://${cur.host}${cur.path}`, status: r.ok ? r.status : null, error: r.ok ? null : r.error, ms: r.ok ? r.ms : null });
+    if (!r.ok || !(r.status >= 300 && r.status < 400) || !r.location) return { hops, final: r, totalMs: Date.now() - t0 };
+    let next;
+    try { next = new URL(r.location, `${cur.proto}://${cur.host}${cur.path}`); } catch { return { hops, final: r, totalMs: Date.now() - t0 }; }
+    if (!["http:", "https:"].includes(next.protocol) || !same.has(next.hostname.toLowerCase())) {
+      hops.push({ url: next.href.slice(0, 300), external: true });
+      return { hops, final: r, totalMs: Date.now() - t0 };
+    }
+    cur = { proto: next.protocol.slice(0, -1), host: next.hostname.toLowerCase(), path: (next.pathname + next.search).slice(0, 500) };
+  }
+  return { hops, final: { ok: false, error: "te veel doorverwijzingen" }, totalMs: Date.now() - t0 };
+}
+
+async function check(host, ip, { detail = false } = {}) {
   const [httpRes, httpsRes] = await Promise.all([probe("http", host, ip), probe("https", host, ip)]);
-  return { ip, http: httpRes, https: httpsRes };
+  const out = { ip, http: httpRes, https: httpsRes };
+  if (detail) {
+    const [httpChain, httpsChain] = await Promise.all([chain("http", host, ip), chain("https", host, ip)]);
+    out.httpChain = httpChain;
+    out.httpsChain = httpsChain;
+  }
+  return out;
+}
+
+// ---------- HTTPS GET met grenzen (crt.sh, RDAP) ----------
+// Alleen https, maximale grootte en tijd, hooguit 3 doorverwijzingen (ook die alleen https).
+function httpsGet(url, { max = 2 * 1024 * 1024, timeout = 20000, redirects = 3, accept = "application/json" } = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error("ongeldige url")); }
+    if (u.protocol !== "https:") return reject(new Error("alleen https"));
+    const req = https.get(u, { timeout, headers: { "User-Agent": "HostOverride-check", Accept: accept } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirects <= 0) return reject(new Error("te veel doorverwijzingen"));
+        let next;
+        try { next = new URL(res.headers.location, u).href; } catch { return reject(new Error("ongeldige doorverwijzing")); }
+        return httpsGet(next, { max, timeout, redirects: redirects - 1, accept }).then(resolve, reject);
+      }
+      const chunks = [];
+      let size = 0;
+      res.on("data", (c) => { size += c.length; if (size > max) { req.destroy(); reject(new Error("antwoord te groot")); } else chunks.push(c); });
+      res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8"), url: u.href }));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+    req.on("error", (e) => reject(new Error(e.code || e.message)));
+  });
+}
+
+const NAME_OK = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
+
+// Subdomeinen uit Certificate Transparency (crt.sh). Alleen namen onder het domein, ontdubbeld, max 500.
+async function crtsh(domain) {
+  const r = await httpsGet(`https://crt.sh/?q=${encodeURIComponent("%." + domain)}&output=json`, { max: 8 * 1024 * 1024, timeout: 30000 });
+  if (r.status !== 200) throw new Error(`crt.sh gaf HTTP ${r.status}`);
+  let list;
+  try { list = JSON.parse(r.body); } catch { throw new Error("crt.sh gaf geen JSON (druk? probeer het later opnieuw)"); }
+  const names = new Set();
+  let wildcard = false;
+  for (const c of Array.isArray(list) ? list : []) {
+    for (let n of String(c?.name_value || "").split(/\s+/)) {
+      n = n.toLowerCase().replace(/\.$/, "");
+      if (n.startsWith("*.")) { wildcard = true; n = n.slice(2); }
+      if ((n === domain || n.endsWith("." + domain)) && n.length <= 253 && NAME_OK.test(n)) names.add(n);
+    }
+  }
+  const sorted = [...names].sort((a, b) => a.split(".").length - b.split(".").length || a.localeCompare(b));
+  return { names: sorted.slice(0, 500), total: sorted.length, truncated: sorted.length > 500, certs: Array.isArray(list) ? list.length : 0, wildcard };
+}
+
+// RDAP: registrar, verloopdatum, DNSSEC en status (locks). Server via de IANA-bootstrap (24 uur gecachet).
+let rdapBoot = null;
+async function rdapServer(tld) {
+  if (!rdapBoot || rdapBoot.exp < Date.now()) {
+    const r = await httpsGet("https://data.iana.org/rdap/dns.json", { max: 1024 * 1024 });
+    const j = JSON.parse(r.body);
+    const map = new Map();
+    for (const [tlds, urls] of j.services || []) {
+      const url = (urls || []).find((x) => /^https:\/\//.test(x));
+      if (url) for (const t of tlds) map.set(String(t).toLowerCase(), url.endsWith("/") ? url : url + "/");
+    }
+    rdapBoot = { map, exp: Date.now() + 864e5 };
+  }
+  return rdapBoot.map.get(tld) || null;
+}
+function vcardName(entity) {
+  const v = entity?.vcardArray?.[1];
+  const fn = Array.isArray(v) ? v.find((x) => x[0] === "fn") : null;
+  return fn ? String(fn[3]).slice(0, 120) : entity?.handle ? String(entity.handle).slice(0, 60) : null;
+}
+async function rdap(domain) {
+  const tld = domain.slice(domain.lastIndexOf(".") + 1);
+  const base = await rdapServer(tld);
+  if (!base) return { domain, supported: false };
+  const r = await httpsGet(`${base}domain/${encodeURIComponent(domain)}`, { max: 1024 * 1024, accept: "application/rdap+json, application/json" });
+  if (r.status === 404) return { domain, supported: true, found: false, server: new URL(base).hostname };
+  if (r.status !== 200) throw new Error(`RDAP gaf HTTP ${r.status}`);
+  const j = JSON.parse(r.body);
+  const ev = (a) => (j.events || []).find((e) => e.eventAction === a)?.eventDate || null;
+  const registrar = (j.entities || []).find((e) => (e.roles || []).includes("registrar"));
+  return {
+    domain, supported: true, found: true, server: new URL(r.url).hostname,
+    registrar: vcardName(registrar),
+    created: ev("registration"), expires: ev("expiration"), changed: ev("last changed"),
+    dnssec: j.secureDNS ? !!j.secureDNS.delegationSigned : null,
+    status: (j.status || []).map(String).slice(0, 20),
+    nameservers: (j.nameservers || []).map((n) => String(n.ldhName || "").toLowerCase()).filter(Boolean).slice(0, 13),
+  };
 }
 
 // ---------- Hosts-bestand (alleen lezen) ----------
@@ -420,4 +551,4 @@ async function hosts(names) {
   };
 }
 
-module.exports = { query, trace, check, TYPES, hosts, parseHostsText, hostsPath, plainIp, HOSTS_MAX };
+module.exports = { query, trace, check, crtsh, rdap, TYPES, hosts, parseHostsText, hostsPath, plainIp, HOSTS_MAX };

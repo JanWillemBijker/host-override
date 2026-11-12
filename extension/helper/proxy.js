@@ -18,7 +18,8 @@ try { tools = require("./dnstools.js"); } catch { /* oudere installatie: DNS-pag
 const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__status, /__hosts (hosts-bestand lezen)
 // Uitbreidingen binnen protocol 6 (de extensie ziet in /__status welke er zijn):
 // targets = doel mag een hostnaam zijn, resolve = /__resolve
-const FEATURES = ["hosts", "targets", "resolve"];
+// check2 = /__check met detail (redirectketen, headers, certificaat www), crtsh = /__crtsh, rdap = /__rdap
+const FEATURES = ["hosts", "targets", "resolve", "check2", "crtsh", "rdap"];
 const PORT = Number(process.env.PORT || 8899);
 const DIR = path.join(os.homedir(), ".host-override");
 const FILE = path.join(DIR, "rules.json");
@@ -274,7 +275,17 @@ const DNS_API = {
   },
   async "/__check"(d) {
     if (!isHost(d.host) || d.host.startsWith("*.") || typeof d.ip !== "string" || !net.isIP(d.ip)) throw new Error("ongeldige invoer");
-    return tools.check(d.host, d.ip);
+    return tools.check(d.host, d.ip, { detail: d.detail === true });
+  },
+  // Subdomeinen via Certificate Transparency (crt.sh). Alleen op klik vanuit de migratie-check.
+  async "/__crtsh"(d) {
+    if (!isHost(d.domain) || d.domain.startsWith("*.") || !d.domain.includes(".")) throw new Error("ongeldig domein");
+    return tools.crtsh(d.domain.toLowerCase());
+  },
+  // Registratiegegevens via RDAP (registrar, verloopdatum, DNSSEC, locks).
+  async "/__rdap"(d) {
+    if (!isHost(d.domain) || d.domain.startsWith("*.") || !d.domain.includes(".")) throw new Error("ongeldig domein");
+    return tools.rdap(d.domain.toLowerCase());
   },
 };
 
