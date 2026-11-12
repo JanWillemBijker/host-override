@@ -18,7 +18,10 @@ export function pairError(r, t) {
   return {
     format: t("Typ de 6 cijfers uit het venster van de helper."),
     missing: t("Geen helper gevonden. Staat het venster met de code nog open?"),
-    "no-pairing": t("De helper wacht niet op een code (verlopen, al gebruikt of te vaak fout). Open de helper opnieuw voor een nieuwe code."),
-    code: r.left ? t("Code klopt niet. Nog {n} poging(en).", { n: r.left }) : t("Code klopt niet."),
+    "no-pairing": t("De helper wacht niet op een code (verlopen, al gebruikt of te vaak geprobeerd). Open de helper opnieuw voor een nieuwe code."),
+    proof: t("Koppelen afgebroken: de helper kon niet bewijzen dat hij deze code kent, en er is niets verstuurd. Controleer de code en typ hem opnieuw. Klopt hij wel? Dan luistert er mogelijk een ander programma op poort 8899."),
+    reused: t("Deze code is al geprobeerd. Typ de code opnieuw zoals hij in het venster staat, of open de helper opnieuw voor een nieuwe code."),
+    session: t("Koppelen duurde te lang of is onderbroken. Probeer het opnieuw."),
+    code: t("Koppelen mislukt: de helper accepteerde het versleutelde geheim niet. Open de helper opnieuw voor een nieuwe code."),
   }[r.error] || t("Koppelen mislukt ({e}).", { e: r.error });
 }

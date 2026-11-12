@@ -1,4 +1,5 @@
 // Gedeelde hulpfuncties voor achtergrondscript en popup.
+import { pairClient } from "./pair.js";
 export const PORT = 8899;
 export const EXPECTED_HELPER = 6; // verhoog als helper/proxy.js een nieuwe versie krijgt
 export const HELPER_BASE = `http://127.0.0.1:${PORT}`;
@@ -74,25 +75,31 @@ export function helperAsset(os, arch = "arm64") {
 }
 export const helperUrl = (os, arch) => HELPER_RELEASES + helperAsset(os, arch);
 
-// Koppelen: de gebruiker typt de 6-cijferige code die de helper toont. Alleen als de helper op 127.0.0.1:8899
-// zegt dat er een koppelvenster open staat. Het extensie-ID gaat mee als Origin (zet Chrome zelf).
-// Uitkomst: { ok } of { ok: false, error: "missing" | "no-pairing" | "code" | "format" | ..., left }
+// Koppelen: de gebruiker typt de 6-cijferige code die de helper toont. De helper moet eerst bewijzen dat hij die
+// code kent; pas dan gaat het geheim (versleuteld) naar hem toe (zie pair.js). Alleen als de helper op
+// 127.0.0.1:8899 zegt dat er een koppelvenster open staat. Mislukt het bewijs, dan wordt dezelfde code niet nog eens
+// gebruikt (de gebruiker moet hem opnieuw typen of een nieuwe code vragen).
+// Uitkomst: { ok } of { ok: false, error: "missing" | "no-pairing" | "proof" | "reused" | "format" | ..., sent }
+const failedCodes = new Set();
 export async function pairHelper(code) {
   code = String(code || "").replace(/\D/g, "");
   if (code.length !== 6) return { ok: false, error: "format" };
+  if (failedCodes.has(code)) return { ok: false, error: "reused" };
   const st = await helperStatus();
   if (!st.reachable) return { ok: false, error: "missing" };
   if (!st.pairing) return { ok: false, error: "no-pairing" };
-  try {
+  const post = async (body) => {
     const res = await fetch(`${HELPER_BASE}/__pair`, {
       method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-Host-Override": "1" },
-      body: JSON.stringify({ code, secret: await getSecret() }),
+      body: JSON.stringify(body),
     });
-    const j = await res.json().catch(() => ({}));
-    forgetHelper();
-    return res.ok ? { ok: true } : { ok: false, error: j.error || String(res.status), left: j.left };
-  } catch (e) { return { ok: false, error: "missing" }; }
+    return { status: res.status, json: await res.json().catch(() => ({})) };
+  };
+  const r = await pairClient({ code, secret: await getSecret(), origin: location.origin, post });
+  if (!r.ok && r.error !== "missing" && r.error !== "no-pairing") failedCodes.add(code);
+  forgetHelper();
+  return r;
 }
 
 // Korte cache per pagina/achtergrond, zodat niet elke DNS-vraag eerst een status-check doet.

@@ -653,66 +653,118 @@ await test("HOST_OVERRIDE_HOSTS_FILE komt alleen uit de omgeving van de helper",
 });
 
 // ---------- 5. Koppelen met een code (/__pair) ----------
-console.log("Koppelen met een 6-cijferige code (/__pair)");
+console.log("Koppelen met een 6-cijferige code (/__pair, helper bewijst eerst de code)");
+const { pairClient } = await import(path.join(EXT, "pair.js"));
 const CFG = path.join(home, ".host-override", "config.json");
 const NEW_SECRET = crypto.randomBytes(32).toString("hex");
 const pairReq = (body, o = {}) => req("/__pair", { method: "POST", token: null, body, ...o });
 const statusOf = async () => (await req(`/__status?nonce=${"ef".repeat(16)}`, { token: null, origin: null, marker: false })).json;
-await test("zonder koppelvenster (gewoon draaien): /__pair geeft 410, ook met geldige invoer", async () => {
+// Client zoals de extensie: logt welke stappen er naar de "helper" gingen.
+function client(code, secret = NEW_SECRET, url = null) {
+  const sent = [];
+  const post = async (body) => {
+    sent.push(body);
+    if (!url) { const r = await pairReq(body); return { status: r.status, json: r.json }; }
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Host-Override": "1", Origin: ORIGIN }, body: JSON.stringify(body) });
+    return { status: r.status, json: await r.json().catch(() => ({})) };
+  };
+  return pairClient({ code, secret, origin: ORIGIN, post }).then((r) => ({ ...r, steps: sent.map((b) => b.step), bodies: JSON.stringify(sent) }));
+}
+const otherCode = (c, d = 1) => String((Number(c) + d) % 1000000).padStart(6, "0");
+await test("zonder koppelvenster (gewoon draaien): /__pair geeft 410", async () => {
   helper = await startHelper(false);
   try {
     assert.equal((await statusOf()).pairing, false);
     assert.ok((await statusOf()).features.includes("pair"));
-    const r = await pairReq({ code: "123456", secret: NEW_SECRET });
-    assert.equal(r.status, 410); assert.equal(r.json.error, "no-pairing");
+    assert.equal((await pairReq({ step: "hello", nonce: "ab".repeat(16) })).status, 410);
+    const r = await client("123456");
+    assert.equal(r.error, "no-pairing"); assert.equal(r.sent, false);
     assert.ok(!fs.existsSync(CFG));
   } finally { helper.kill(); }
 });
-await test("koppelvenster: verkeerde code, Origin, Host of marker geweigerd; juiste code schrijft config 0600 en werkt één keer", async () => {
+await test("happy path: helper bewijst de code, geheim versleuteld, config 0600, daarna eenmalig", async () => {
   helper = await startHelper(false, { args: ["--pair"] });
   try {
     const code = helper.code;
     assert.match(code, /^\d{6}$/, "code staat in de uitvoer");
     assert.equal((await statusOf()).pairing, true);
-    const wrong = String((Number(code) + 1) % 1000000).padStart(6, "0");
-    const w = await pairReq({ code: wrong, secret: NEW_SECRET });
-    assert.equal(w.status, 403); assert.equal(w.json.error, "code"); assert.equal(w.json.left, 4);
-    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { origin: "https://evil.example" })).status, 403);
-    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { origin: null })).status, 403);
-    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { marker: false })).status, 403);
-    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { host: `evil.example:${port}` })).status, 403);
-    assert.equal((await pairReq({ code, secret: "kort" })).status, 400);
-    assert.equal((await pairReq("{kapot")).status, 400);
-    assert.ok(!fs.existsSync(CFG), "nog geen config");
-    const ok = await pairReq({ code: code.slice(0, 3) + " " + code.slice(3), secret: NEW_SECRET.toUpperCase() });
-    assert.equal(ok.status, 200, ok.text);
-    const cfg = JSON.parse(fs.readFileSync(CFG, "utf8"));
-    assert.deepEqual(cfg, { origins: [ORIGIN], secret: NEW_SECRET });
+    const r = await client(code.slice(0, 3) + " " + code.slice(3));
+    assert.equal(r.ok, true, JSON.stringify(r)); assert.deepEqual(r.steps, ["hello", "finish"]);
+    assert.ok(!r.bodies.includes(NEW_SECRET), "geheim nooit leesbaar verstuurd");
+    assert.deepEqual(JSON.parse(fs.readFileSync(CFG, "utf8")), { origins: [ORIGIN], secret: NEW_SECRET });
     if (process.platform !== "win32") {
       assert.equal(fs.statSync(CFG).mode & 0o777, 0o600, "config.json 0600");
       assert.equal(fs.statSync(path.dirname(CFG)).mode & 0o777, 0o700, "map 0700");
     }
     assert.ok(!fs.readdirSync(path.dirname(CFG)).some((f) => f.endsWith(".tmp")), "geen tijdelijke bestanden");
-    // Direct in gebruik: status-bewijs met het nieuwe geheim, opdrachten met het nieuwe geheim.
     const nonce = crypto.randomBytes(16).toString("hex");
     const st = (await req(`/__status?nonce=${nonce}`, { token: null, origin: null, marker: false })).json;
     assert.equal(st.pairing, false);
     assert.equal(st.proof, crypto.createHmac("sha256", NEW_SECRET).update("host-override/status:" + nonce).digest("hex"));
     assert.equal((await req("/__hosts?names=a.example.com", { token: NEW_SECRET })).status, 200);
-    // Eenmalig: dezelfde code (of een ander geheim) werkt niet nog eens.
-    const again = await pairReq({ code, secret: crypto.randomBytes(32).toString("hex") });
-    assert.equal(again.status, 410);
+    const again = await client(code, crypto.randomBytes(32).toString("hex"));
+    assert.equal(again.error, "no-pairing"); assert.equal(again.sent, false);
     assert.equal(JSON.parse(fs.readFileSync(CFG, "utf8")).secret, NEW_SECRET, "config niet overschreven");
   } finally { helper.kill(); }
 });
-await test("na 5 foute codes is het koppelvenster dicht (ook voor de juiste code)", async () => {
+await test("verkeerde code: bewijs klopt niet, afgebroken zonder dat er iets na 'hello' verstuurd wordt", async () => {
   helper = await startHelper(false, { args: ["--pair"] });
   try {
-    const code = helper.code;
-    const wrong = String((Number(code) + 7) % 1000000).padStart(6, "0");
-    for (let i = 0; i < 4; i++) assert.equal((await pairReq({ code: wrong, secret: NEW_SECRET })).status, 403);
-    assert.equal((await pairReq({ code: wrong, secret: NEW_SECRET })).status, 410);
-    assert.equal((await pairReq({ code, secret: NEW_SECRET })).status, 410);
+    const r = await client(otherCode(helper.code));
+    assert.equal(r.ok, false); assert.equal(r.error, "proof"); assert.equal(r.sent, false);
+    assert.deepEqual(r.steps, ["hello"], "geen finish");
+    assert.ok(!fs.existsSync(CFG));
+    assert.equal((await client(helper.code)).ok, true, "daarna met de juiste code (nieuwe poging) wel");
+  } finally { helper.kill(); }
+});
+await test("nep-helper zonder de code (ander programma op de poort) krijgt het geheim niet", async () => {
+  const got = [];
+  const fake = http.createServer((q, s) => {
+    let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => {
+      got.push(b);
+      s.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ helperNonce: crypto.randomBytes(16).toString("hex"), proof: crypto.randomBytes(32).toString("hex") }));
+    });
+  });
+  await new Promise((r) => fake.listen(0, "127.0.0.1", r));
+  try {
+    const r = await client("123456", NEW_SECRET, `http://127.0.0.1:${fake.address().port}/__pair`);
+    assert.equal(r.error, "proof"); assert.equal(r.sent, false);
+    assert.equal(got.length, 1, "alleen hello");
+    assert.ok(!got.join("").includes(NEW_SECRET) && !got.join("").includes("finish"));
+    // Kapot antwoord (geen bewijs) idem.
+    const fake2 = http.createServer((q, s) => s.writeHead(200, { "Content-Type": "application/json" }).end("{}"));
+    await new Promise((res) => fake2.listen(0, "127.0.0.1", res));
+    const r2 = await client("123456", NEW_SECRET, `http://127.0.0.1:${fake2.address().port}/__pair`);
+    fake2.close();
+    assert.equal(r2.error, "proof"); assert.equal(r2.sent, false);
+  } finally { fake.close(); }
+});
+await test("helper-kant: oud formaat, verkeerde Origin/Host/marker, vervalst of herhaald finish geweigerd", async () => {
+  helper = await startHelper(false, { args: ["--pair"] });
+  try {
+    assert.equal((await pairReq({ code: helper.code, secret: NEW_SECRET })).status, 400, "oud formaat {code, secret}");
+    const hello = { step: "hello", nonce: "cd".repeat(16) };
+    assert.equal((await pairReq(hello, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await pairReq(hello, { origin: null })).status, 403);
+    assert.equal((await pairReq(hello, { marker: false })).status, 403);
+    assert.equal((await pairReq(hello, { host: `evil.example:${port}` })).status, 403);
+    assert.equal((await pairReq("{kapot")).status, 400);
+    const h = await pairReq(hello);
+    assert.equal(h.status, 200); assert.match(h.json.helperNonce, /^[0-9a-f]{32}$/); assert.match(h.json.proof, /^[0-9a-f]{64}$/);
+    const fin = { step: "finish", nonce: hello.nonce, helperNonce: h.json.helperNonce, iv: "00".repeat(12), data: "11".repeat(80) };
+    assert.equal((await pairReq(fin)).status, 403, "verkeerde ciphertext");
+    assert.equal((await pairReq(fin)).status, 403, "sessie is op");
+    assert.equal((await pairReq({ ...fin, helperNonce: "ee".repeat(16) })).status, 403, "onbekende sessie");
+    assert.ok(!fs.existsSync(CFG));
+  } finally { helper.kill(); }
+});
+await test("na 5 pogingen (hello's) is het koppelvenster dicht, ook voor de juiste code", async () => {
+  helper = await startHelper(false, { args: ["--pair"] });
+  try {
+    for (let i = 0; i < 4; i++) assert.equal((await client(otherCode(helper.code, i + 1))).error, "proof");
+    assert.equal((await pairReq({ step: "hello", nonce: "ab".repeat(16) })).status, 200, "vijfde");
+    assert.equal((await pairReq({ step: "hello", nonce: "ab".repeat(16) })).status, 410);
+    assert.equal((await client(helper.code)).error, "no-pairing");
     assert.ok(!fs.existsSync(CFG));
   } finally { helper.kill(); }
 });
@@ -721,21 +773,23 @@ await test("code verloopt (HOST_OVERRIDE_PAIR_TTL, alleen omgeving; standaard 5 
   try {
     await new Promise((r) => setTimeout(r, 450));
     assert.equal((await statusOf()).pairing, false);
-    assert.equal((await pairReq({ code: helper.code, secret: NEW_SECRET })).status, 410);
+    assert.equal((await client(helper.code)).error, "no-pairing");
     assert.ok(!fs.existsSync(CFG));
   } finally { helper.kill(); }
-  assert.match(fs.readFileSync(path.join(EXT, "helper", "proxy.js"), "utf8"), /: 5 \* 60 \* 1000;/);
+  const src = fs.readFileSync(path.join(EXT, "helper", "proxy.js"), "utf8");
+  assert.match(src, /: 5 \* 60 \* 1000;/);
+  assert.match(src, /PAIR_ITERATIONS = 600000;/);
+  assert.match(fs.readFileSync(path.join(EXT, "pair.js"), "utf8"), /PAIR_ITERATIONS = 600000;/, "zelfde aantal iteraties");
 });
 await test("--pair met bestaande config: nieuwe koppeling vervangt de oude", async () => {
   helper = await startHelper(true, { args: ["--pair"] });
   try {
     assert.equal((await req("/__hosts", {})).status, 200, "oude config werkt tijdens het venster");
-    assert.equal((await pairReq({ code: helper.code, secret: NEW_SECRET })).status, 200);
+    assert.equal((await client(helper.code)).ok, true);
     assert.equal((await req("/__hosts", {})).status, 403, "oude geheim werkt niet meer");
     assert.equal((await req("/__hosts", { token: NEW_SECRET })).status, 200);
   } finally { helper.kill(); }
 });
-
 await test("pair.json (voorgrond-helper terwijl de dienst draait): privé bestand opent een venster, eenmalig", async () => {
   helper = await startHelper(true);
   const PF = path.join(home, ".host-override", "pair.json");
@@ -751,11 +805,11 @@ await test("pair.json (voorgrond-helper terwijl de dienst draait): privé bestan
     assert.equal((await statusOf()).pairing, false, "vervaltijd te ver weg: genegeerd");
     fs.writeFileSync(PF, JSON.stringify({ code: "654321", exp: Date.now() + 60000 }), { mode: 0o600 });
     assert.equal((await statusOf()).pairing, true);
-    assert.equal((await pairReq({ code: "123456", secret: NEW_SECRET })).status, 403);
-    assert.equal((await pairReq({ code: "654321", secret: NEW_SECRET })).status, 200);
+    assert.equal((await client("123456")).error, "proof");
+    assert.equal((await client("654321")).ok, true);
     assert.ok(!fs.existsSync(PF), "verbruikt");
     assert.equal(JSON.parse(fs.readFileSync(CFG, "utf8")).secret, NEW_SECRET);
-    assert.equal((await pairReq({ code: "654321", secret: SECRET })).status, 410);
+    assert.equal((await client("654321", SECRET)).error, "no-pairing");
   } finally { helper.kill(); fs.rmSync(PF, { force: true }); }
 });
 

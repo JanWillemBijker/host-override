@@ -349,19 +349,27 @@ function hostsApi(req, res) {
 
 // ---------- Eenmalig koppelen (pairing) ----------
 // Alleen tijdens een koppelvenster: de helper is in de voorgrond gestart (eerste start van de binary of --pair) en
-// toont een willekeurige 6-cijferige code. De gebruiker typt die code in de extensie; de extensie stuurt de code en
-// haar geheim naar POST /__pair. Het extensie-ID komt uit de Origin-header (die kan een website niet vervalsen).
-// - Code geldt 5 minuten, één keer (daarna is het venster dicht), max. 5 foute pogingen (dan ook dicht).
-// - Zelfde controles als de andere opdrachten: Host 127.0.0.1/localhost, Origin chrome-extension://, X-Host-Override.
-// - Schrijft config.json atomisch met rechten 0600 (map 0700). Zonder koppelvenster: 410, nooit stil koppelen.
+// toont een willekeurige 6-cijferige code. De gebruiker typt die code in de extensie. Daarna (zie extension/pair.js):
+//   1. hello:  extensie stuurt nonce nE; de helper antwoordt met nH en proof = HMAC(kProof, "ho-pair-proof|nE|nH").
+//              Zo bewijst de helper EERST dat hij de code kent; een ander programma op de poort krijgt niets.
+//   2. finish: de extensie stuurt het geheim versleuteld (AES-256-GCM, sleutel uit de code, AAD met nE, nH en Origin).
+//              Lukt ontsleutelen, dan kende de extensie de code; het extensie-ID komt uit de Origin-header.
+// Sleutels: k0 = PBKDF2-SHA256(code, "ho-pair-v1|"+nE, 600.000), kProof/kEnc via HKDF. Door de trage PBKDF2 en de
+// korte sessietijd (20 s tussen hello en finish) is een onderschept bewijs niet op tijd offline te kraken.
+// Limieten: code 5 minuten geldig, één geslaagde koppeling, max. 5 hello's (pogingen) per code, elke sessie één finish.
+// Zelfde controles als de andere opdrachten: Host 127.0.0.1/localhost, Origin chrome-extension://, X-Host-Override.
+// Schrijft config.json atomisch met rechten 0600 (map 0700). Zonder koppelvenster: 410, nooit stil koppelen.
 const PAIR_TTL = Number(process.env.HOST_OVERRIDE_PAIR_TTL) > 0 ? Number(process.env.HOST_OVERRIDE_PAIR_TTL) : 5 * 60 * 1000;
 const PAIR_MAX_TRIES = 5;
+const PAIR_SESSION_MS = 20 * 1000;
+const PAIR_ITERATIONS = 600000; // zelfde waarde als extension/pair.js
+const HEX32 = /^[0-9a-f]{32}$/;
 let pairing = null; // { code: Buffer, exp, tries, file }
 let onPaired = null; // callback na geslaagd koppelen (installeren als dienst e.d.)
 const newCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 function openPairing() {
   const code = newCode();
-  pairing = { code: Buffer.from(code), exp: Date.now() + PAIR_TTL, tries: 0, file: false };
+  pairing = { code: Buffer.from(code), exp: Date.now() + PAIR_TTL, tries: 0, file: false, sessions: new Map() };
   return code;
 }
 // Koppelverzoek via ~/.host-override/pair.json: als de helper al als dienst draait (poort bezet), schrijft een in de
@@ -377,7 +385,7 @@ function filePairing() {
       fs.rmSync(PAIR_FILE, { force: true });
       return null;
     }
-    return { code: Buffer.from(d.code), exp: d.exp, tries: 0, file: true };
+    return { code: Buffer.from(d.code), exp: d.exp, tries: 0, file: true, sessions: new Map() };
   } catch { return null; }
 }
 function currentPairing() {
@@ -400,6 +408,15 @@ function writeConfig(origin, secret) {
   fs.renameSync(tmp, CONFIG);
   if (process.platform !== "win32") fs.chmodSync(CONFIG, 0o600);
 }
+function pairKeys(code, nE, nH) {
+  return new Promise((res, rej) => crypto.pbkdf2(code, "ho-pair-v1|" + nE, PAIR_ITERATIONS, 32, "sha256", (err, k0) => {
+    if (err) return rej(err);
+    res({
+      proof: Buffer.from(crypto.hkdfSync("sha256", k0, Buffer.from(nE, "hex"), "ho-pair-proof", 32)),
+      enc: Buffer.from(crypto.hkdfSync("sha256", k0, Buffer.from(nE + nH, "hex"), "ho-pair-enc", 32)),
+    });
+  }));
+}
 function pair(req, res) {
   const reply = (code, obj) => res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(obj));
   const origin = String(req.headers.origin || "");
@@ -407,24 +424,54 @@ function pair(req, res) {
   if (req.method !== "POST") return reply(405, { error: "POST verwacht" });
   let body = "";
   req.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
-  req.on("end", () => {
-    if (!currentPairing()) return reply(410, { error: "no-pairing" });
+  req.on("end", async () => {
+    const p = currentPairing();
+    if (!p) return reply(410, { error: "no-pairing" });
     let d;
     try { d = JSON.parse(body); } catch { return reply(400, { error: "ongeldige invoer" }); }
-    const secret = typeof d?.secret === "string" ? d.secret.toLowerCase() : "";
-    const got = Buffer.from(typeof d?.code === "string" ? d.code.replace(/\s/g, "") : "");
-    if (!SECRET_RE.test(secret)) return reply(400, { error: "ongeldige invoer" });
-    const ok = got.length === pairing.code.length && crypto.timingSafeEqual(got, pairing.code);
-    if (!ok) {
-      if (++pairing.tries >= PAIR_MAX_TRIES) { closePairing(); console.log("Te veel foute codes: koppelen gestopt. Start opnieuw voor een nieuwe code."); return reply(410, { error: "no-pairing" }); }
-      return reply(403, { error: "code", left: PAIR_MAX_TRIES - pairing.tries });
+    if (!d || typeof d !== "object" || !HEX32.test(d.nonce || "")) return reply(400, { error: "ongeldige invoer" });
+    const now = Date.now();
+    for (const [k, v] of p.sessions) if (v.exp < now) p.sessions.delete(k);
+
+    if (d.step === "hello") {
+      if (p.tries >= PAIR_MAX_TRIES) { closePairing(); return reply(410, { error: "no-pairing" }); }
+      p.tries++; // elke hello is een poging: een bewijs mag maar beperkt vaak worden opgevraagd
+      const nH = crypto.randomBytes(16).toString("hex");
+      let k;
+      try { k = await pairKeys(p.code, d.nonce, nH); } catch { return reply(500, { error: "crypto" }); }
+      if (pairing !== p) return reply(410, { error: "no-pairing" }); // intussen gesloten
+      p.sessions.set(nH, { nE: d.nonce, enc: k.enc, exp: Date.now() + PAIR_SESSION_MS, origin });
+      const proof = crypto.createHmac("sha256", k.proof).update(`ho-pair-proof|${d.nonce}|${nH}`).digest("hex");
+      return reply(200, { helperNonce: nH, proof, left: PAIR_MAX_TRIES - p.tries });
     }
-    closePairing(); // eenmalig
-    try { writeConfig(origin, secret); } catch (e) { console.error("Kon config.json niet schrijven:", e.message); return reply(500, { error: "config" }); }
-    loadConfig();
-    console.log(`Gekoppeld met ${origin}.`);
-    reply(200, { ok: true });
-    if (onPaired) setImmediate(onPaired);
+
+    if (d.step === "finish") {
+      const s = HEX32.test(d.helperNonce || "") ? p.sessions.get(d.helperNonce) : null;
+      if (s) p.sessions.delete(d.helperNonce); // elke sessie één finish
+      const fail = (code, error) => {
+        if (p.tries >= PAIR_MAX_TRIES && !p.sessions.size) { closePairing(); console.log("Te veel pogingen: koppelen gestopt. Start opnieuw voor een nieuwe code."); }
+        return reply(code, { error });
+      };
+      if (!s || s.nE !== d.nonce || s.origin !== origin) return fail(403, "session");
+      if (!/^[0-9a-f]{24}$/.test(d.iv || "") || !/^([0-9a-f]{2}){17,256}$/.test(d.data || "")) return fail(400, "ongeldige invoer");
+      let secret;
+      try {
+        const data = Buffer.from(d.data, "hex");
+        const dec = crypto.createDecipheriv("aes-256-gcm", s.enc, Buffer.from(d.iv, "hex"));
+        dec.setAAD(Buffer.from(`ho-pair-secret|${d.nonce}|${d.helperNonce}|${origin}`));
+        dec.setAuthTag(data.subarray(data.length - 16));
+        secret = Buffer.concat([dec.update(data.subarray(0, data.length - 16)), dec.final()]).toString("utf8").toLowerCase();
+      } catch { return fail(403, "code"); }
+      if (!SECRET_RE.test(secret)) return fail(400, "ongeldige invoer");
+      closePairing(); // eenmalig
+      try { writeConfig(origin, secret); } catch (e) { console.error("Kon config.json niet schrijven:", e.message); return reply(500, { error: "config" }); }
+      loadConfig();
+      console.log(`Gekoppeld met ${origin}.`);
+      reply(200, { ok: true });
+      if (onPaired) setImmediate(onPaired);
+      return;
+    }
+    return reply(400, { error: "ongeldige invoer" });
   });
 }
 

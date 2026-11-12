@@ -97,7 +97,14 @@ Opties van de binary:
 | `--install` / `--uninstall` | automatisch starten aan / uit (uninstall verwijdert ook `~/.host-override`) |
 | `--version`, `--help` | |
 
-**Koppelen (`POST /__pair`):** alleen tijdens een koppelvenster. De code (6 cijfers, `crypto.randomInt`) geldt 5 minuten en één keer; na 5 foute pogingen sluit het venster. Zelfde controles als de andere opdrachten (Host `127.0.0.1`/`localhost`, Origin `chrome-extension://…`, header `X-Host-Override`); het extensie-ID komt uit de Origin. `config.json` wordt atomisch geschreven (0600, map 0700). Buiten een koppelvenster: 410. `/__status` meldt `pairing`, `kind` (`bin`/`node`) en feature `pair`. Restrisico: de extensie stuurt het geheim mee met de code; draait er op dat moment een ander programma op poort 8899 dat zich als helper voordoet, dan ontvangt dat het geheim. Daarvoor moet er al vreemde software op je computer draaien, en de code ziet alleen de echte helper; de extensie stuurt pas iets als de helper een open koppelvenster meldt.
+**Koppelen (`POST /__pair`):** alleen tijdens een koppelvenster; de code (6 cijfers, `crypto.randomInt`) geldt 5 minuten en één keer. De helper bewijst **eerst** dat hij de code kent, pas daarna gaat het geheim naar hem toe (`extension/pair.js`, zelfde berekening in `proxy.js`):
+1. `hello`: de extensie stuurt een willekeurige nonce `nE`; de helper antwoordt met `nH` en `proof = HMAC-SHA256(kProof, "ho-pair-proof|nE|nH")`.
+2. De extensie controleert het bewijs (WebCrypto `verify`). Klopt het niet, dan breekt ze af met een duidelijke melding ("ander programma op poort 8899?"); er gaat niets meer naartoe, en dezelfde code wordt niet nog eens geprobeerd.
+3. `finish`: het geheim gaat versleuteld mee (AES-256-GCM, AAD bindt `nE`, `nH` en de Origin). Lukt ontsleutelen, dan kende de extensie de code; het extensie-ID komt uit de Origin-header.
+
+Sleutels: `k0 = PBKDF2-SHA256(code, "ho-pair-v1|" + nE, 600.000 iteraties)`, daaruit `kProof = HKDF(k0, salt nE, "ho-pair-proof")` en `kEnc = HKDF(k0, salt nE‖nH, "ho-pair-enc")`. Limieten: max. 5 pogingen (elke `hello` telt), 20 seconden tussen `hello` en `finish`, één `finish` per sessie, na een geslaagde koppeling is het venster dicht. Zelfde controles als de andere opdrachten (Host `127.0.0.1`/`localhost`, Origin `chrome-extension://…`, header `X-Host-Override`); `config.json` wordt atomisch geschreven (0600, map 0700). Buiten een koppelvenster: 410. `/__status` meldt `pairing`, `kind` (`bin`/`node`) en feature `pair`.
+
+Restrisico: een programma op deze computer dat een `hello` naar de echte helper stuurt, krijgt een bewijs waarmee het de code in theorie offline kan raden (er zijn maar 10⁶ codes). Daarom de trage PBKDF2 (600.000 iteraties per poging) en het tijdslot van 20 seconden: het raden moet binnen die 20 s klaar zijn, en dat zou meer rekenkracht vragen dan een gewone computer heeft. Daarnaast kost elke `hello` een van de 5 pogingen, en zo'n aanval valt op: de echte koppeling mislukt dan. Een programma dat op poort 8899 luistert zonder de code te kennen (de oude zwakte), krijgt het geheim niet meer.
 
 ## Testen
 
