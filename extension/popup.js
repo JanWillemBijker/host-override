@@ -4,6 +4,7 @@ import {
   detectArch, helperUrl, helperAsset, HELPER_SIGNED, pairHelper,
 } from "./common.js";
 import { openText, unsignedText, pairError } from "./helpertext.js";
+import { formatCode } from "./pair.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
   DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, buildBackup, readBackup, backupPreview, applyBackup, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
@@ -107,6 +108,7 @@ function showHelperCard(kind) {
 }
 $("hbarBtn").onclick = () => { helperOpen = !helperOpen; showHelperCard(helperKind); };
 const arch = await detectArch();
+$("hCode").oninput = () => { $("hCode").value = formatCode($("hCode").value); };
 $("hPair").onsubmit = async (e) => {
   e.preventDefault();
   const msg = $("hPairMsg");

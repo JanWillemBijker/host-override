@@ -1,4 +1,4 @@
-// Koppelen met de helper via de 6-cijferige code: de helper bewijst EERST dat hij de code kent, pas daarna gaat
+// Koppelen met de helper via de koppelcode (12 tekens Crockford-base32 = 60 bits, getoond als XXXX-XXXX-XXXX): de helper bewijst EERST dat hij de code kent, pas daarna gaat
 // het geheim (versleuteld) naar hem toe. Puur WebCrypto: werkt in de extensie en in Node (tests).
 //
 //   1. extensie -> helper : { step: "hello", nonce: nE }                       (16 willekeurige bytes, hex)
@@ -19,6 +19,25 @@ export const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16)
 export const fromHex = (h) => new Uint8Array((h.match(/../g) || []).map((x) => parseInt(x, 16)));
 const HEX32 = /^[0-9a-f]{32}$/;
 
+// Koppelcode: Crockford-base32 zonder I, L, O, U. Invoer: hoofdletterongevoelig, streepjes/spaties/punten genegeerd,
+// O wordt 0 en I/L worden 1 (Crockford). Zo kunnen verwarrende tekens geen fout geven.
+export const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export const CODE_LENGTH = 12;
+export const CODE_RE = /^[0-9A-HJKMNP-TV-Z]{12}$/;
+export function cleanCode(input) {
+  return String(input || "").toUpperCase().replace(/[\s\-_.]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
+}
+// Geldige code (12 tekens) of null.
+export function normCode(input) {
+  const c = cleanCode(input);
+  return CODE_RE.test(c) ? c : null;
+}
+// Voor tijdens het typen: alleen geldige tekens, max. 12, in groepjes van 4 (XXXX-XXXX-XXXX).
+export function formatCode(input) {
+  const c = cleanCode(input).replace(/[^0-9A-HJKMNP-TV-Z]/g, "").slice(0, CODE_LENGTH);
+  return c.match(/.{1,4}/g)?.join("-") || "";
+}
+
 async function keys(code, nE, nH) {
   const base = await subtle.importKey("raw", enc.encode(code), "PBKDF2", false, ["deriveBits"]);
   const k0 = await subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: enc.encode("ho-pair-v1|" + nE), iterations: PAIR_ITERATIONS }, base, 256);
@@ -35,8 +54,8 @@ async function keys(code, nE, nH) {
 // Uitkomst: { ok: true } of { ok: false, error: "format" | "no-pairing" | "proof" | "missing" | ..., sent: false }
 // sent = of het (versleutelde) geheim de deur uit is gegaan.
 export async function pairClient({ code, secret, origin, post }) {
-  code = String(code || "").replace(/\D/g, "");
-  if (code.length !== 6) return { ok: false, error: "format", sent: false };
+  code = normCode(code);
+  if (!code) return { ok: false, error: "format", sent: false };
   const nE = toHex(globalThis.crypto.getRandomValues(new Uint8Array(16)));
   let r;
   try { r = await post({ step: "hello", nonce: nE }); } catch { return { ok: false, error: "missing", sent: false }; }

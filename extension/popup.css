@@ -324,7 +324,7 @@ table.mig tbody th { white-space: nowrap; font-size: 10.5px; }
 .hdlalt:empty { display: none; }
 #hDl { font-weight: 600; }
 .hpair { display: flex; gap: 6px; margin: 6px 0 2px; grid-template-columns: none; align-items: center; flex-wrap: wrap; }
-.hpair input { width: 96px; font: 600 15px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-align: center; }
+.hpair input { width: 170px; font: 600 14px ui-monospace, Menlo, monospace; letter-spacing: .03em; text-align: center; text-transform: uppercase; }
 .hpair .primary { grid-column: auto; padding: 6px 12px; }
 .hpairmsg { font-size: 12px; min-height: 16px; }
 .hpairmsg.bad { color: var(--bad-fg); } .hpairmsg.ok { color: var(--ok-fg); }

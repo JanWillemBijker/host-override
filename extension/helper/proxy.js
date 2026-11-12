@@ -19,7 +19,7 @@ const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__statu
 // Uitbreidingen binnen protocol 6 (de extensie ziet in /__status welke er zijn):
 // targets = doel mag een hostnaam zijn, resolve = /__resolve
 // check2 = /__check met detail (redirectketen, headers, certificaat www), crtsh = /__crtsh, rdap = /__rdap
-// pair = eenmalig koppelen met een 6-cijferige code (/__pair), alleen in een koppelvenster (--pair of eerste start van de binary)
+// pair = eenmalig koppelen met een koppelcode van 12 tekens (/__pair), alleen in een koppelvenster (--pair of eerste start van de binary)
 const FEATURES = ["hosts", "targets", "resolve", "check2", "crtsh", "rdap", "pair"];
 // Draait dit als losse binary (Node Single Executable Application) of als `node proxy.js`?
 const IS_BIN = (() => { try { return require("node:sea").isSea(); } catch { return false; } })();
@@ -349,24 +349,31 @@ function hostsApi(req, res) {
 
 // ---------- Eenmalig koppelen (pairing) ----------
 // Alleen tijdens een koppelvenster: de helper is in de voorgrond gestart (eerste start van de binary of --pair) en
-// toont een willekeurige 6-cijferige code. De gebruiker typt die code in de extensie. Daarna (zie extension/pair.js):
+// toont een willekeurige koppelcode van 12 tekens (Crockford-base32, 60 bits, als XXXX-XXXX-XXXX). De gebruiker typt
+// die code in de extensie. Daarna (zie extension/pair.js):
 //   1. hello:  extensie stuurt nonce nE; de helper antwoordt met nH en proof = HMAC(kProof, "ho-pair-proof|nE|nH").
 //              Zo bewijst de helper EERST dat hij de code kent; een ander programma op de poort krijgt niets.
 //   2. finish: de extensie stuurt het geheim versleuteld (AES-256-GCM, sleutel uit de code, AAD met nE, nH en Origin).
 //              Lukt ontsleutelen, dan kende de extensie de code; het extensie-ID komt uit de Origin-header.
-// Sleutels: k0 = PBKDF2-SHA256(code, "ho-pair-v1|"+nE, 600.000), kProof/kEnc via HKDF. Door de trage PBKDF2 en de
-// korte sessietijd (20 s tussen hello en finish) is een onderschept bewijs niet op tijd offline te kraken.
-// Limieten: code 5 minuten geldig, één geslaagde koppeling, max. 5 hello's (pogingen) per code, elke sessie één finish.
+// Sleutels: k0 = PBKDF2-SHA256(code, "ho-pair-v1|"+nE, 600.000), kProof/kEnc via HKDF. De code heeft 60 bits entropie:
+// een onderschept bewijs offline kraken kost 2^60 PBKDF2-berekeningen en is dus onhaalbaar.
+// Limieten: code 5 minuten geldig, één geslaagde koppeling, max. 5 hello's (pogingen) per code, elke sessie één finish
+// binnen 60 s.
 // Zelfde controles als de andere opdrachten: Host 127.0.0.1/localhost, Origin chrome-extension://, X-Host-Override.
 // Schrijft config.json atomisch met rechten 0600 (map 0700). Zonder koppelvenster: 410, nooit stil koppelen.
 const PAIR_TTL = Number(process.env.HOST_OVERRIDE_PAIR_TTL) > 0 ? Number(process.env.HOST_OVERRIDE_PAIR_TTL) : 5 * 60 * 1000;
 const PAIR_MAX_TRIES = 5;
-const PAIR_SESSION_MS = 20 * 1000;
+const PAIR_SESSION_MS = 60 * 1000; // ruim, zodat PBKDF2 op een trage machine past
 const PAIR_ITERATIONS = 600000; // zelfde waarde als extension/pair.js
 const HEX32 = /^[0-9a-f]{32}$/;
 let pairing = null; // { code: Buffer, exp, tries, file }
 let onPaired = null; // callback na geslaagd koppelen (installeren als dienst e.d.)
-const newCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+// Crockford-base32 (zonder I, L, O, U): 12 tekens x 5 bits = 60 bits. Bij invoer worden O->0 en I/L->1 gelezen
+// (Crockford), dus verwarrende tekens kunnen niet fout gaan. Met 2^60 mogelijke codes is een onderschept bewijs
+// (PBKDF2 600.000 iteraties per poging) offline niet te kraken.
+const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const CODE_RE = /^[0-9A-HJKMNP-TV-Z]{12}$/;
+const newCode = () => Array.from({ length: 12 }, () => CODE_ALPHABET[crypto.randomInt(0, 32)]).join("");
 function openPairing() {
   const code = newCode();
   pairing = { code: Buffer.from(code), exp: Date.now() + PAIR_TTL, tries: 0, file: false, sessions: new Map() };
@@ -381,7 +388,7 @@ function filePairing() {
     const st = fs.lstatSync(PAIR_FILE);
     const priv = st.isFile() && (process.platform === "win32" || ((st.mode & 0o077) === 0 && st.uid === process.getuid()));
     const d = priv ? JSON.parse(fs.readFileSync(PAIR_FILE, "utf8")) : null;
-    if (!d || typeof d.code !== "string" || !/^\d{6}$/.test(d.code) || !(d.exp > Date.now()) || d.exp > Date.now() + PAIR_TTL + 5000) {
+    if (!d || typeof d.code !== "string" || !CODE_RE.test(d.code) || !(d.exp > Date.now()) || d.exp > Date.now() + PAIR_TTL + 5000) {
       fs.rmSync(PAIR_FILE, { force: true });
       return null;
     }
@@ -585,11 +592,11 @@ function start({ pairMode = false } = {}) {
   });
 }
 function showCode(code) {
-  const spaced = code.slice(0, 3) + " " + code.slice(3);
+  const spaced = code.match(/.{4}/g).join("-");
   console.log("");
-  console.log("  ┌──────────────────────────────────────────┐");
+  console.log("  ┌─────────────────────────────────────────────────┐");
   console.log(`  │   Koppelcode / pairing code:  ${spaced}    │`);
-  console.log("  └──────────────────────────────────────────┘");
+  console.log("  └─────────────────────────────────────────────────┘");
   console.log("  Typ deze code in de extensie (Host Override > Koppel helper). Geldig 5 minuten, één keer.");
   console.log("  Type this code into the extension (Host Override > Connect helper). Valid 5 minutes, once.");
   console.log("");

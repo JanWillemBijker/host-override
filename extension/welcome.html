@@ -29,9 +29,9 @@
           <div class="dlrow"><a id="dl" class="btn primary" href="#" rel="noopener">Download</a> <a id="dlAlt" class="small" href="#" rel="noopener"></a></div>
         </li>
         <li><span id="openText"></span> <span id="unsignedText" class="hint"></span></li>
-        <li><span data-th>Er verschijnt een venster met een <b>koppelcode van 6 cijfers</b>. Typ die hier:</span>
+        <li><span data-th>Er verschijnt een venster met een <b>koppelcode van 12 tekens</b>. Typ of plak die hier:</span>
           <form id="pairForm" class="pair">
-            <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" aria-label="Koppelcode" spellcheck="false">
+            <input id="code" autocomplete="off" autocapitalize="characters" maxlength="20" placeholder="XXXX-XXXX-XXXX" aria-label="Koppelcode" spellcheck="false">
             <button class="primary">Koppel</button>
           </form>
           <div id="pairMsg" class="pairmsg" role="status"></div>

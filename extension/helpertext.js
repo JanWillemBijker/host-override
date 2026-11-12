@@ -16,7 +16,7 @@ export function unsignedText(os, signed, t) {
 
 export function pairError(r, t) {
   return {
-    format: t("Typ de 6 cijfers uit het venster van de helper."),
+    format: t("Typ de koppelcode van 12 tekens uit het venster van de helper (bijvoorbeeld 7K3M-Q9PX-2HTR)."),
     missing: t("Geen helper gevonden. Staat het venster met de code nog open?"),
     "no-pairing": t("De helper wacht niet op een code (verlopen, al gebruikt of te vaak geprobeerd). Open de helper opnieuw voor een nieuwe code."),
     proof: t("Koppelen afgebroken: de helper kon niet bewijzen dat hij deze code kent, en er is niets verstuurd. Controleer de code en typ hem opnieuw. Klopt hij wel? Dan luistert er mogelijk een ander programma op poort 8899."),

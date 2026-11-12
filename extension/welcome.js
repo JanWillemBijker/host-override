@@ -1,6 +1,7 @@
 import { OS_LABELS, detectOS, detectArch, buildSetupCommand, helperStatus, EXPECTED_HELPER, helperUrl, helperAsset, HELPER_RELEASES, HELPER_SIGNED, pairHelper } from "./common.js";
 import { initI18n, t } from "./i18n.js";
 import { openText, unsignedText, pairError } from "./helpertext.js";
+import { formatCode } from "./pair.js";
 
 await initI18n();
 
@@ -46,6 +47,7 @@ $("copy").onclick = async () => {
   setTimeout(() => ($("copy").textContent = t("Kopieer setup-commando")), 2000);
 };
 
+$("code").oninput = () => { const el = $("code"); el.value = formatCode(el.value); };
 $("pairForm").onsubmit = async (e) => {
   e.preventDefault();
   const btn = $("pairForm").querySelector("button");
@@ -71,7 +73,7 @@ async function poll() {
   }
   $("state").className = "state wait";
   $("stateText").textContent = !st.reachable ? t("Wachten op de helper...")
-    : st.pairing ? t("De helper wacht op de koppelcode. Typ de 6 cijfers hierboven.")
+    : st.pairing ? t("De helper wacht op de koppelcode. Typ of plak de 12 tekens hierboven.")
     : st.version < EXPECTED_HELPER ? t("Er draait een oudere helper. Download de nieuwe helper (of gebruik het Node.js-commando) om hem bij te werken.")
     : t("De helper draait, maar herkent deze extensie nog niet. Open de gedownloade helper opnieuw voor een koppelcode.");
   timer = setTimeout(poll, 2000);

@@ -1,5 +1,5 @@
 // Gedeelde hulpfuncties voor achtergrondscript en popup.
-import { pairClient } from "./pair.js";
+import { pairClient, normCode } from "./pair.js";
 export const PORT = 8899;
 export const EXPECTED_HELPER = 6; // verhoog als helper/proxy.js een nieuwe versie krijgt
 export const HELPER_BASE = `http://127.0.0.1:${PORT}`;
@@ -75,15 +75,15 @@ export function helperAsset(os, arch = "arm64") {
 }
 export const helperUrl = (os, arch) => HELPER_RELEASES + helperAsset(os, arch);
 
-// Koppelen: de gebruiker typt de 6-cijferige code die de helper toont. De helper moet eerst bewijzen dat hij die
+// Koppelen: de gebruiker typt de koppelcode (12 tekens, XXXX-XXXX-XXXX) die de helper toont. De helper moet eerst bewijzen dat hij die
 // code kent; pas dan gaat het geheim (versleuteld) naar hem toe (zie pair.js). Alleen als de helper op
 // 127.0.0.1:8899 zegt dat er een koppelvenster open staat. Mislukt het bewijs, dan wordt dezelfde code niet nog eens
 // gebruikt (de gebruiker moet hem opnieuw typen of een nieuwe code vragen).
 // Uitkomst: { ok } of { ok: false, error: "missing" | "no-pairing" | "proof" | "reused" | "format" | ..., sent }
 const failedCodes = new Set();
 export async function pairHelper(code) {
-  code = String(code || "").replace(/\D/g, "");
-  if (code.length !== 6) return { ok: false, error: "format" };
+  code = normCode(code);
+  if (!code) return { ok: false, error: "format" };
   if (failedCodes.has(code)) return { ok: false, error: "reused" };
   const st = await helperStatus();
   if (!st.reachable) return { ok: false, error: "missing" };

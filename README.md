@@ -14,7 +14,7 @@ Een extensie kan geen IP-adressen koppelen zonder zo'n helper. Daarom is er eenm
 
 1. Ga in Chrome naar `chrome://extensions`, zet **Ontwikkelaarsmodus** aan, kies **Uitgepakte extensie laden** en selecteer de map `extension/` (de map met `manifest.json`).
 2. Er opent een welkomstpagina. Twee manieren om de helper te installeren:
-   - **Download (geen Node.js nodig, aanbevolen):** klik **Download** voor je systeem (macOS Apple silicon/Intel, Windows x64, Linux x64), open het bestand. Er verschijnt een venster met een **koppelcode van 6 cijfers**; typ die op de welkomstpagina (of in de popup) en klik **Koppel**. De helper kopieert zichzelf naar `~/.host-override/bin/` en start voortaan bij inloggen.
+   - **Download (geen Node.js nodig, aanbevolen):** klik **Download** voor je systeem (macOS Apple silicon/Intel, Windows x64, Linux x64), open het bestand. Er verschijnt een venster met een **koppelcode van 12 tekens** (`XXXX-XXXX-XXXX`); typ of plak die op de welkomstpagina (of in de popup) en klik **Koppel**. De helper kopieert zichzelf naar `~/.host-override/bin/` en start voortaan bij inloggen.
      Zolang de binaries niet ondertekend zijn: macOS > Systeeminstellingen > Privacy en beveiliging > **Toch openen**; Windows > **Meer info** > **Toch uitvoeren**. Zie `store/SIGNING.md`.
    - **Geavanceerd: met Node.js:** klik **Kopieer setup-commando**, plak het in Terminal (macOS/Linux) of PowerShell (Windows) en druk op Enter. Werkt zonder download, vanuit de broncode in de extensie.
    De pagina meldt zodra de helper actief is.
@@ -97,14 +97,14 @@ Opties van de binary:
 | `--install` / `--uninstall` | automatisch starten aan / uit (uninstall verwijdert ook `~/.host-override`) |
 | `--version`, `--help` | |
 
-**Koppelen (`POST /__pair`):** alleen tijdens een koppelvenster; de code (6 cijfers, `crypto.randomInt`) geldt 5 minuten en één keer. De helper bewijst **eerst** dat hij de code kent, pas daarna gaat het geheim naar hem toe (`extension/pair.js`, zelfde berekening in `proxy.js`):
+**Koppelen (`POST /__pair`):** alleen tijdens een koppelvenster; de code (12 tekens Crockford-base32 = 60 bits, `crypto.randomInt`, getoond als `XXXX-XXXX-XXXX`; invoer hoofdletterongevoelig, streepjes en spaties tellen niet, O telt als 0 en I/L als 1) geldt 5 minuten en één keer. De helper bewijst **eerst** dat hij de code kent, pas daarna gaat het geheim naar hem toe (`extension/pair.js`, zelfde berekening in `proxy.js`):
 1. `hello`: de extensie stuurt een willekeurige nonce `nE`; de helper antwoordt met `nH` en `proof = HMAC-SHA256(kProof, "ho-pair-proof|nE|nH")`.
 2. De extensie controleert het bewijs (WebCrypto `verify`). Klopt het niet, dan breekt ze af met een duidelijke melding ("ander programma op poort 8899?"); er gaat niets meer naartoe, en dezelfde code wordt niet nog eens geprobeerd.
 3. `finish`: het geheim gaat versleuteld mee (AES-256-GCM, AAD bindt `nE`, `nH` en de Origin). Lukt ontsleutelen, dan kende de extensie de code; het extensie-ID komt uit de Origin-header.
 
-Sleutels: `k0 = PBKDF2-SHA256(code, "ho-pair-v1|" + nE, 600.000 iteraties)`, daaruit `kProof = HKDF(k0, salt nE, "ho-pair-proof")` en `kEnc = HKDF(k0, salt nE‖nH, "ho-pair-enc")`. Limieten: max. 5 pogingen (elke `hello` telt), 20 seconden tussen `hello` en `finish`, één `finish` per sessie, na een geslaagde koppeling is het venster dicht. Zelfde controles als de andere opdrachten (Host `127.0.0.1`/`localhost`, Origin `chrome-extension://…`, header `X-Host-Override`); `config.json` wordt atomisch geschreven (0600, map 0700). Buiten een koppelvenster: 410. `/__status` meldt `pairing`, `kind` (`bin`/`node`) en feature `pair`.
+Sleutels: `k0 = PBKDF2-SHA256(code, "ho-pair-v1|" + nE, 600.000 iteraties)`, daaruit `kProof = HKDF(k0, salt nE, "ho-pair-proof")` en `kEnc = HKDF(k0, salt nE‖nH, "ho-pair-enc")`. Limieten: max. 5 pogingen (elke `hello` telt), 60 seconden tussen `hello` en `finish`, één `finish` per sessie, na een geslaagde koppeling is het venster dicht. Zelfde controles als de andere opdrachten (Host `127.0.0.1`/`localhost`, Origin `chrome-extension://…`, header `X-Host-Override`); `config.json` wordt atomisch geschreven (0600, map 0700). Buiten een koppelvenster: 410. `/__status` meldt `pairing`, `kind` (`bin`/`node`) en feature `pair`.
 
-Restrisico: een programma op deze computer dat een `hello` naar de echte helper stuurt, krijgt een bewijs waarmee het de code in theorie offline kan raden (er zijn maar 10⁶ codes). Daarom de trage PBKDF2 (600.000 iteraties per poging) en het tijdslot van 20 seconden: het raden moet binnen die 20 s klaar zijn, en dat zou meer rekenkracht vragen dan een gewone computer heeft. Daarnaast kost elke `hello` een van de 5 pogingen, en zo'n aanval valt op: de echte koppeling mislukt dan. Een programma dat op poort 8899 luistert zonder de code te kennen (de oude zwakte), krijgt het geheim niet meer.
+Restrisico: een programma op deze computer dat een `hello` naar de echte helper stuurt, krijgt een bewijs dat het offline zou kunnen proberen te kraken. Met 60 bits entropie (2⁶⁰ ≈ 10¹⁸ codes) en 600.000 PBKDF2-iteraties per poging is dat onhaalbaar, ook met veel GPU's; een echte PAKE is daarom niet nodig. Elke `hello` kost bovendien een van de 5 pogingen, en zo'n poging valt op omdat de echte koppeling dan mislukt. Een programma dat op poort 8899 luistert zonder de code te kennen, krijgt het geheim niet.
 
 ## Testen
 
@@ -122,7 +122,7 @@ De extensie bevat alles (ook de helper), dus delen is alleen de extensie delen.
 | Melding | Oplossing |
 | --- | --- |
 | "Helper draait niet" | Open de gedownloade helper opnieuw en typ de code, of plak het setup-commando opnieuw (uit de popup of welkomstpagina). Controle: open `http://127.0.0.1:8899` |
-| "Code klopt niet" / "wacht niet op een code" | De code geldt 5 minuten, één keer, max. 5 pogingen. Open de helper opnieuw voor een nieuwe code. |
+| "Koppelen afgebroken" / "wacht niet op een code" | Controleer de code (12 tekens, hoofdletters en streepjes maken niet uit). De code geldt 5 minuten, één keer, max. 5 pogingen. Open de helper opnieuw voor een nieuwe code. Klopt de code wel, kijk dan wat er op poort 8899 draait (`lsof -i :8899`). |
 | "Helper-update beschikbaar" of "Helper moet opnieuw worden ingesteld" | Open de gedownloade helper opnieuw en typ de nieuwe code, of kopieer het setup-commando uit de popup en plak het nog één keer. Blijft de melding, kijk dan wat er op poort 8899 draait (`lsof -i :8899`). Tot het is opgelost gaan domeinen op je lijst nergens heen (foutmelding in plaats van een verkeerde server). |
 | "Een andere extensie beheert de proxy" | Zet andere proxy- of VPN-extensies uit |
 | Certificaatfout | De testserver moet een geldig certificaat voor dat domein hebben |

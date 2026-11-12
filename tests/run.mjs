@@ -424,8 +424,9 @@ function startHelper(withConfig = true, { args = [], env: extraEnv = {} } = {}) 
   child.output = () => out;
   let out = "";
   return new Promise((res, rej) => {
-    const ready = () => out.includes("proxy op 127.0.0.1") && (!args.includes("--pair") || /code[^\n]*:\s+\d{3} \d{3}/.test(out));
-    child.stdout.on("data", (d) => { out += d; if (ready()) { child.code = (out.match(/:\s+(\d{3}) (\d{3})/) || []).slice(1).join(""); res(child); } });
+    const CODE_SHOWN = /code[^\n]*:\s+([0-9A-Z]{4})-([0-9A-Z]{4})-([0-9A-Z]{4})/;
+    const ready = () => out.includes("proxy op 127.0.0.1") && (!args.includes("--pair") || CODE_SHOWN.test(out));
+    child.stdout.on("data", (d) => { out += d; if (ready()) { child.code = (out.match(CODE_SHOWN) || []).slice(1).join(""); res(child); } });
     child.stderr.on("data", (d) => { out += d; });
     child.on("exit", (c) => rej(new Error("helper stopte: " + c + " " + out)));
     setTimeout(() => rej(new Error("helper start niet: " + out)), 5000);
@@ -653,8 +654,26 @@ await test("HOST_OVERRIDE_HOSTS_FILE komt alleen uit de omgeving van de helper",
 });
 
 // ---------- 5. Koppelen met een code (/__pair) ----------
-console.log("Koppelen met een 6-cijferige code (/__pair, helper bewijst eerst de code)");
-const { pairClient } = await import(path.join(EXT, "pair.js"));
+console.log("Koppelen met een koppelcode van 12 tekens (/__pair, helper bewijst eerst de code)");
+const { pairClient, normCode, formatCode, CODE_ALPHABET, CODE_RE } = await import(path.join(EXT, "pair.js"));
+await test("koppelcode: formaat, normalisatie (hoofdletters, streepjes, spaties, O/I/L) en opmaak tijdens typen", () => {
+  assert.equal(normCode("7k3m-q9px-2htr"), "7K3MQ9PX2HTR");
+  assert.equal(normCode(" 7K3M Q9PX 2HTR\n"), "7K3MQ9PX2HTR");
+  assert.equal(normCode("O1IL-oiLl-2345"), "0111-0111-2345".replace(/-/g, ""), "O->0, I/L->1 (Crockford)");
+  for (const bad of ["", "7K3M-Q9PX-2HT", "7K3M-Q9PX-2HTRX", "7K3M-Q9PX-2HTU", "123456", "7K3M-Q9PX-2HT!"]) assert.equal(normCode(bad), null, bad);
+  assert.equal(formatCode("7k3mq9"), "7K3M-Q9");
+  assert.equal(formatCode("7k3m q9px-2htr-extra"), "7K3M-Q9PX-2HTR");
+  assert.equal(formatCode("u!7k"), "7K", "ongeldige tekens vallen weg");
+});
+await test("koppelcode-entropie: 32 tekens zonder I/L/O/U, 12 lang = 60 bits; helper gebruikt randomInt over dat alfabet", () => {
+  assert.equal(CODE_ALPHABET.length, 32); assert.equal(new Set(CODE_ALPHABET).size, 32);
+  assert.ok(!/[ILOU]/.test(CODE_ALPHABET));
+  assert.ok(12 * Math.log2(CODE_ALPHABET.length) >= 60);
+  const src = fs.readFileSync(path.join(EXT, "helper", "proxy.js"), "utf8");
+  assert.ok(src.includes(`const CODE_ALPHABET = "${CODE_ALPHABET}";`), "zelfde alfabet in de helper");
+  assert.match(src, /Array\.from\(\{ length: 12 \}, \(\) => CODE_ALPHABET\[crypto\.randomInt\(0, 32\)\]\)/);
+  assert.ok(!/randomInt\(0, 1000000\)/.test(src), "geen 6-cijferige code meer");
+});
 const CFG = path.join(home, ".host-override", "config.json");
 const NEW_SECRET = crypto.randomBytes(32).toString("hex");
 const pairReq = (body, o = {}) => req("/__pair", { method: "POST", token: null, body, ...o });
@@ -670,14 +689,15 @@ function client(code, secret = NEW_SECRET, url = null) {
   };
   return pairClient({ code, secret, origin: ORIGIN, post }).then((r) => ({ ...r, steps: sent.map((b) => b.step), bodies: JSON.stringify(sent) }));
 }
-const otherCode = (c, d = 1) => String((Number(c) + d) % 1000000).padStart(6, "0");
+// Andere geldige code: laatste teken d plaatsen verder in het alfabet.
+const otherCode = (c, d = 1) => c.slice(0, 11) + CODE_ALPHABET[(CODE_ALPHABET.indexOf(c[11]) + d) % 32];
 await test("zonder koppelvenster (gewoon draaien): /__pair geeft 410", async () => {
   helper = await startHelper(false);
   try {
     assert.equal((await statusOf()).pairing, false);
     assert.ok((await statusOf()).features.includes("pair"));
     assert.equal((await pairReq({ step: "hello", nonce: "ab".repeat(16) })).status, 410);
-    const r = await client("123456");
+    const r = await client("7K3M-Q9PX-2HTR");
     assert.equal(r.error, "no-pairing"); assert.equal(r.sent, false);
     assert.ok(!fs.existsSync(CFG));
   } finally { helper.kill(); }
@@ -686,9 +706,9 @@ await test("happy path: helper bewijst de code, geheim versleuteld, config 0600,
   helper = await startHelper(false, { args: ["--pair"] });
   try {
     const code = helper.code;
-    assert.match(code, /^\d{6}$/, "code staat in de uitvoer");
+    assert.match(code, CODE_RE, "code (XXXX-XXXX-XXXX) staat in de uitvoer");
     assert.equal((await statusOf()).pairing, true);
-    const r = await client(code.slice(0, 3) + " " + code.slice(3));
+    const r = await client(" " + code.toLowerCase().match(/.{4}/g).join(" - ") + " "); // zoals geplakt of slordig getypt
     assert.equal(r.ok, true, JSON.stringify(r)); assert.deepEqual(r.steps, ["hello", "finish"]);
     assert.ok(!r.bodies.includes(NEW_SECRET), "geheim nooit leesbaar verstuurd");
     assert.deepEqual(JSON.parse(fs.readFileSync(CFG, "utf8")), { origins: [ORIGIN], secret: NEW_SECRET });
@@ -727,14 +747,14 @@ await test("nep-helper zonder de code (ander programma op de poort) krijgt het g
   });
   await new Promise((r) => fake.listen(0, "127.0.0.1", r));
   try {
-    const r = await client("123456", NEW_SECRET, `http://127.0.0.1:${fake.address().port}/__pair`);
+    const r = await client("7K3M-Q9PX-2HTR", NEW_SECRET, `http://127.0.0.1:${fake.address().port}/__pair`);
     assert.equal(r.error, "proof"); assert.equal(r.sent, false);
     assert.equal(got.length, 1, "alleen hello");
     assert.ok(!got.join("").includes(NEW_SECRET) && !got.join("").includes("finish"));
     // Kapot antwoord (geen bewijs) idem.
     const fake2 = http.createServer((q, s) => s.writeHead(200, { "Content-Type": "application/json" }).end("{}"));
     await new Promise((res) => fake2.listen(0, "127.0.0.1", res));
-    const r2 = await client("123456", NEW_SECRET, `http://127.0.0.1:${fake2.address().port}/__pair`);
+    const r2 = await client("7K3M-Q9PX-2HTR", NEW_SECRET, `http://127.0.0.1:${fake2.address().port}/__pair`);
     fake2.close();
     assert.equal(r2.error, "proof"); assert.equal(r2.sent, false);
   } finally { fake.close(); }
@@ -796,20 +816,22 @@ await test("pair.json (voorgrond-helper terwijl de dienst draait): privé bestan
   try {
     assert.equal((await statusOf()).pairing, false);
     if (process.platform !== "win32") {
-      fs.writeFileSync(PF, JSON.stringify({ code: "123456", exp: Date.now() + 60000 }), { mode: 0o644 });
+      fs.writeFileSync(PF, JSON.stringify({ code: "7K3MQ9PX2HTR", exp: Date.now() + 60000 }), { mode: 0o644 });
       fs.chmodSync(PF, 0o644);
       assert.equal((await statusOf()).pairing, false, "leesbaar voor anderen: genegeerd");
       assert.ok(!fs.existsSync(PF), "en verwijderd");
     }
-    fs.writeFileSync(PF, JSON.stringify({ code: "123456", exp: Date.now() + 10 * 60 * 1000 }), { mode: 0o600 });
+    fs.writeFileSync(PF, JSON.stringify({ code: "7K3MQ9PX2HTR", exp: Date.now() + 10 * 60 * 1000 }), { mode: 0o600 });
     assert.equal((await statusOf()).pairing, false, "vervaltijd te ver weg: genegeerd");
-    fs.writeFileSync(PF, JSON.stringify({ code: "654321", exp: Date.now() + 60000 }), { mode: 0o600 });
+    fs.writeFileSync(PF, JSON.stringify({ code: "123456", exp: Date.now() + 60000 }), { mode: 0o600 });
+    assert.equal((await statusOf()).pairing, false, "oud 6-cijferig formaat: genegeerd");
+    fs.writeFileSync(PF, JSON.stringify({ code: "Q9PX2HTR7K3M", exp: Date.now() + 60000 }), { mode: 0o600 });
     assert.equal((await statusOf()).pairing, true);
-    assert.equal((await client("123456")).error, "proof");
-    assert.equal((await client("654321")).ok, true);
+    assert.equal((await client("7K3M-Q9PX-2HTR")).error, "proof");
+    assert.equal((await client("q9px-2htr-7k3m")).ok, true);
     assert.ok(!fs.existsSync(PF), "verbruikt");
     assert.equal(JSON.parse(fs.readFileSync(CFG, "utf8")).secret, NEW_SECRET);
-    assert.equal((await client("654321", SECRET)).error, "no-pairing");
+    assert.equal((await client("Q9PX-2HTR-7K3M", SECRET)).error, "no-pairing");
   } finally { helper.kill(); fs.rmSync(PF, { force: true }); }
 });
 
