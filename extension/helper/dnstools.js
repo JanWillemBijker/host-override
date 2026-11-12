@@ -129,12 +129,23 @@ function parseMessage(buf) {
   };
 }
 
+// Vergelijkbare vorm van een IP (IPv6 kan op meerdere manieren geschreven worden).
+const canonIp = (ip) => { try { return net.isIPv6(ip) ? new URL(`http://[${ip}]/`).hostname : ip; } catch { return ip; } };
+// Vraagsectie (naam, type, klasse) van een bericht; hoofdletters tellen niet mee.
+const question = (b, end) => Buffer.from(b.subarray(12, end)).toString("latin1").toLowerCase();
+
 function udp(buf, id, server, port, timeout) {
   return new Promise((resolve, reject) => {
     const sock = dgram.createSocket(net.isIPv6(server) ? "udp6" : "udp4");
     const timer = setTimeout(() => { sock.close(); reject(new Error("timeout")); }, timeout);
-    sock.on("message", (msg) => {
-      if (msg.length >= 2 && msg.readUInt16BE(0) === id) { clearTimeout(timer); sock.close(); resolve(msg); }
+    const want = canonIp(server);
+    const qEnd = buf.length - 11; // de vraag eindigt vlak voor het EDNS0-OPT-record (11 bytes)
+    const q = question(buf, qEnd);
+    sock.on("message", (msg, rinfo) => {
+      // Alleen antwoorden van de gevraagde server en poort, met hetzelfde ID en dezelfde vraag (tegen spoofing).
+      if (canonIp(rinfo.address) !== want || rinfo.port !== port) return;
+      if (msg.length < qEnd || msg.readUInt16BE(0) !== id || question(msg, qEnd) !== q) return;
+      clearTimeout(timer); sock.close(); resolve(msg);
     });
     sock.on("error", (e) => { clearTimeout(timer); sock.close(); reject(e); });
     sock.send(buf, port, server, (e) => { if (e) { clearTimeout(timer); sock.close(); reject(e); } });

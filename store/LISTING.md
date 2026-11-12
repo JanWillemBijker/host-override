@@ -24,11 +24,11 @@ Host Override koppelt domeinen aan een ander IP-adres, alleen in je gewone Chrom
 - Wildcards (*.voorbeeld.nl), IP's per regel aanpassen, alles tegelijk wisselen, aan/uit met Alt+Shift+H.
 - Deel je regels als gewone tekst in hosts-formaat.
 - Open met één klik een apart testvenster met dezelfde regels, of kopieer het commando (macOS, Windows en Linux).
-- Ingebouwde DNS-check: records, nameservers rechtstreeks bevraagd, resolvers vergelijken, SPF/DMARC en een HTTP/HTTPS/certificaatcontrole per IP.
+- Ingebouwde DNS-check: records, nameservers rechtstreeks bevraagd, resolvers vergelijken, SPF/DMARC en een HTTP/HTTPS/certificaatcontrole per IP. In het zijpaneel controleert hij automatisch elk nieuw domein in je actieve tab zolang de tab DNS-check open staat.
 - Werkt als popup of in het zijpaneel van Chrome.
 
 BELANGRIJK: lokale helper vereist
-Chrome laat een extensie zelf geen IP-adressen koppelen. Daarom installeer je eenmalig een klein lokaal programma (de helper, vereist Node.js). De extensie leidt je er stap voor stap doorheen: je kopieert een setup-commando en plakt het zelf in Terminal of PowerShell. De helper zit volledig in het pakket van de extensie (er wordt niets gedownload), draait alleen op je eigen computer, is alleen bereikbaar via 127.0.0.1 en accepteert alleen opdrachten van deze extensie. Verwijderen kan met één commando.
+Chrome laat een extensie zelf geen IP-adressen koppelen. Daarom installeer je eenmalig een klein lokaal programma (de helper, vereist Node.js). De extensie leidt je er stap voor stap doorheen: je kopieert een setup-commando en plakt het zelf in Terminal of PowerShell. De helper zit volledig in het pakket van de extensie (er wordt niets gedownload), draait alleen op je eigen computer en is alleen bereikbaar via 127.0.0.1. Hij voert alleen opdrachten uit met een geheime sleutel die alleen deze extensie en jouw helper kennen (bij de installatie aangemaakt), en de extensie controleert eerst of de helper die sleutel kent. Verwijderen kan met één commando.
 
 Privacy: geen account, geen tracking, geen analytics. Regels en instellingen blijven op je eigen computer.
 
@@ -42,11 +42,11 @@ Host Override maps domains to another IP address, in your regular Chrome profile
 - Wildcards (*.example.com), per-rule IPs, switch all at once, toggle with Alt+Shift+H.
 - Share your rules as plain text in hosts-file format.
 - One click opens a separate test window with the same rules, or copy the command (macOS, Windows, Linux).
-- Built-in DNS check: records, nameservers queried directly, resolver comparison, SPF/DMARC and an HTTP/HTTPS/certificate check per IP.
+- Built-in DNS check: records, nameservers queried directly, resolver comparison, SPF/DMARC and an HTTP/HTTPS/certificate check per IP. In the side panel it automatically checks every new domain in your active tab while the DNS check tab is open.
 - Works as a popup or in Chrome's side panel.
 
 IMPORTANT: local helper required
-Chrome does not let an extension map IP addresses by itself, so you install a small local program (the helper, requires Node.js) once. The extension guides you step by step: you copy a setup command and paste it into Terminal or PowerShell yourself. The helper ships entirely inside the extension package (nothing is downloaded), runs only on your own computer, is only reachable via 127.0.0.1 and only accepts commands from this extension. It can be removed with one command.
+Chrome does not let an extension map IP addresses by itself, so you install a small local program (the helper, requires Node.js) once. The extension guides you step by step: you copy a setup command and paste it into Terminal or PowerShell yourself. The helper ships entirely inside the extension package (nothing is downloaded), runs only on your own computer and is only reachable via 127.0.0.1. It only carries out commands that include a secret key that only this extension and your helper know (created during setup), and the extension first checks that the helper knows that key. It can be removed with one command.
 
 Privacy: no account, no tracking, no analytics. Rules and settings stay on your own computer.
 
@@ -60,7 +60,7 @@ EN: Test websites on another server by routing chosen domains to a user-specifie
 | Toestemming | Rechtvaardiging (EN) |
 | --- | --- |
 | `proxy` | Sets a PAC proxy rule for the regular profile only, so that only the domains the user added are routed via the local helper (127.0.0.1) to the IP the user entered. All other traffic goes DIRECT. This is the core function. |
-| `storage` | Stores the user's rules and settings locally (chrome.storage.local) and per-tab IP info for the session (chrome.storage.session). |
+| `storage` | Stores the user's rules and settings locally (chrome.storage.local), the random secret key shared with the local helper, and per-tab IP info for the session (chrome.storage.session). |
 | `alarms` | Once per minute checks whether the local helper is running and re-sends the rules, so the extension recovers after the helper restarts. |
 | `webRequest` | Reads only the server IP of main-frame requests (onCompleted) to show which IP the current site runs on and to mark tabs with an active override. Only works after the user grants optional host access via "Enable IP display". Nothing is blocked, modified, stored outside the browser or sent anywhere. |
 | `activeTab` | Reads the URL of the active tab when the user opens the popup or presses the shortcut, to show the current domain and reload it after a rule change. |
@@ -74,12 +74,17 @@ EN: Test websites on another server by routing chosen domains to a user-specifie
 Antwoord: **Nee, geen remote code.** Alle JavaScript zit in het pakket. Geen `eval`, geen `new Function`, geen externe scripts. De PAC-regel wordt lokaal opgebouwd uit gevalideerde domeinnamen (alleen a-z, 0-9, `-`, `.` en `*.`). De helper (`helper/proxy.js`, `helper/dnstools.js`) zit in het pakket; het setup-commando wordt uit die meegeleverde bestanden samengesteld en door de gebruiker zelf in de terminal geplakt. De extensie voert zelf niets uit op het systeem en downloadt niets.
 
 Toelichting voor de reviewer (veld "Opmerkingen" of in de beschrijving):
-> This extension requires a small local helper (Node.js) because Chrome extensions cannot map hostnames to IP addresses. The helper source is bundled in the package (`helper/`), shown to the user before they copy it, and installed by the user themselves. It listens on 127.0.0.1 only, accepts control requests only from this extension's origin (ID pinned at setup) with a Host-header check against DNS rebinding, and does not contact the developer. Test instructions: load the extension, follow the welcome page (copy the setup command, paste in Terminal), add a rule such as `example.com` → `93.184.215.14`.
+> This extension requires a small local helper (Node.js) because Chrome extensions cannot map hostnames to IP addresses. The helper source is bundled in the package (`helper/`), shown to the user before they copy it, and installed by the user themselves. It listens on 127.0.0.1 only and does not contact the developer.
+>
+> How setup and authentication work: on first run the extension generates a random 32-byte secret (`crypto.getRandomValues`) and keeps it in `chrome.storage.local`. The setup command shown on the welcome page / popup is assembled locally from the bundled helper files plus a `config.json` containing the extension ID and that secret; the user pastes it into Terminal/PowerShell, which writes `~/.host-override/` (directory 0700, files 0600 on macOS/Linux) and registers the helper to start at login (LaunchAgent / systemd user service / Startup folder). Every control request (`/__rules`, `/__launch`, `/__dns`, `/__trace`, `/__check`) carries the secret in an `X-Host-Override-Token` header; the helper compares it in constant time and additionally checks the Origin (this extension's ID) and Host header (127.0.0.1/localhost, against DNS rebinding). Without a valid config the helper rejects every control request. Before sending anything, the extension sends a random nonce to `/__status` and verifies via WebCrypto that the helper answers with HMAC-SHA256(secret, nonce); if not (e.g. another program on port 8899), it shows a warning and sends no rules or traffic there. In the side panel, the DNS check runs automatically for the active tab's domain while the DNS tab is open (disclosed in the privacy policy).
+>
+> Test instructions: load the extension, follow the welcome page (copy the setup command, paste in Terminal), add a rule such as `example.com` → `93.184.215.14`.
 
 ## Gegevensgebruik (formulier "Privacypraktijken")
 - Verzamelde gegevens: **geen van de categorieën aanvinken.** De extensie verzamelt en verstuurt geen gegevens naar de maker of derden.
   - Websitecontent/webgeschiedenis: niet verzameld. Het IP van de hoofdpagina wordt alleen lokaal getoond (chrome.storage.session).
   - De hostnaam gaat alleen naar Cloudflare DNS als de gebruiker op "Opzoeken" klikt; dat is een door de gebruiker gestarte functie, geen verzameling door de ontwikkelaar.
+  - De DNS-check (via de lokale helper; in het zijpaneel automatisch voor het domein van de actieve tab zolang de tab DNS-check open staat) stuurt domeinnamen naar openbare DNS-servers en doet `GET /` naar de IP's van dat domein. Dat is functionaliteit op de computer van de gebruiker, geen verzameling door de ontwikkelaar; het staat in het privacybeleid.
 - Vink de drie verklaringen aan: geen verkoop aan derden, geen gebruik buiten de kernfunctie, geen gebruik voor kredietwaardigheid.
 - Privacybeleid-URL: openbare URL van `store/PRIVACY.md` (zie hieronder).
 

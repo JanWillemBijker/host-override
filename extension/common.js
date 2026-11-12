@@ -1,6 +1,78 @@
 // Gedeelde hulpfuncties voor achtergrondscript en popup.
 export const PORT = 8899;
-export const EXPECTED_HELPER = 5; // verhoog als helper/proxy.js een nieuwe versie krijgt
+export const EXPECTED_HELPER = 6; // verhoog als helper/proxy.js een nieuwe versie krijgt
+export const HELPER_BASE = `http://127.0.0.1:${PORT}`;
+
+// ---------- Gedeeld geheim met de helper ----------
+// 32 willekeurige bytes (hex), eenmalig aangemaakt en bewaard in chrome.storage.local. Het setup-commando
+// schrijft het in ~/.host-override/config.json; elke opdracht aan de helper stuurt het mee.
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const fromHex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
+const SECRET_RE = /^[0-9a-f]{64}$/;
+
+export async function getSecret() {
+  const read = async () => (await chrome.storage.local.get("helperSecret")).helperSecret;
+  let s = await read();
+  if (SECRET_RE.test(s || "")) return s;
+  // Lock: popup, welkomstpagina en achtergrond kunnen tegelijk starten; maak maar één geheim aan.
+  const make = async () => {
+    s = await read();
+    if (SECRET_RE.test(s || "")) return s;
+    s = hex(crypto.getRandomValues(new Uint8Array(32)));
+    await chrome.storage.local.set({ helperSecret: s });
+    return s;
+  };
+  return navigator.locks ? navigator.locks.request("host-override-secret", make) : make();
+}
+
+// Controleert of op poort 8899 echt onze helper draait: die moet HMAC(geheim, nonce) terugsturen.
+// Pas daarna gaat het geheim (en gaan de regels) naar de helper.
+// Uitkomst: { reachable, version, configured, verified, error }
+export async function helperStatus() {
+  const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+  let json;
+  try {
+    const res = await fetch(`${HELPER_BASE}/__status?nonce=${nonce}`, { cache: "no-store" });
+    json = await res.json().catch(() => null);
+  } catch (e) {
+    return { reachable: false, version: 0, configured: false, verified: false, error: String(e) };
+  }
+  const version = Number(json?.helper) || 1;
+  const configured = json?.configured === true;
+  let verified = false;
+  if (configured && typeof json.proof === "string" && /^[0-9a-f]{64}$/.test(json.proof)) {
+    try {
+      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(await getSecret()),
+        { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+      verified = await crypto.subtle.verify("HMAC", key, fromHex(json.proof), new TextEncoder().encode("host-override/status:" + nonce));
+    } catch { verified = false; }
+  }
+  return { reachable: true, version, configured, verified };
+}
+
+// Korte cache per pagina/achtergrond, zodat niet elke DNS-vraag eerst een status-check doet.
+let verifiedUntil = 0;
+export function forgetHelper() { verifiedUntil = 0; }
+
+// Opdracht aan de helper, met geheim. Weigert als de helper zich niet heeft bewezen.
+export async function helperFetch(path, { method = "POST", body } = {}) {
+  if (Date.now() > verifiedUntil) {
+    const st = await helperStatus();
+    if (!st.verified) {
+      const e = new Error(!st.reachable ? "helper-missing" : st.version < EXPECTED_HELPER ? "helper-outdated" : "helper-setup");
+      e.code = e.message;
+      throw e;
+    }
+    verifiedUntil = Date.now() + 10000;
+  }
+  const res = await fetch(HELPER_BASE + path, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Host-Override": "1", "X-Host-Override-Token": await getSecret() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 403) forgetHelper();
+  return res;
+}
 
 // Strikte validatie: deze waarden komen in de PAC-regel, de helper en (gekopieerde) shell-commando's.
 // Hostnaam: labels van 1-63 tekens (a-z, 0-9, -), niet beginnend of eindigend met -, totaal max 253.
@@ -107,13 +179,13 @@ export function buildChromeCommand(rules, os, profile = "chrome-test") {
 // ---------- Setup-commando voor de helper ----------
 const HELPER_FILES = ["proxy.js", "dnstools.js"];
 
-// `read(pad)` geeft de tekst van een meegeleverd bestand terug. `extId` is het ID van deze extensie:
-// de helper accepteert daarna alleen nog verzoeken van precies deze extensie (config.json).
-export async function buildSetupCommand(os, read, extId = chrome.runtime.id) {
+// `read(pad)` geeft de tekst van een meegeleverd bestand terug. `extId` is het ID van deze extensie.
+// config.json legt ID en geheim vast: de helper accepteert daarna alleen opdrachten met dat geheim.
+export async function buildSetupCommand(os, read, extId = chrome.runtime.id, secret) {
+  secret = secret || await getSecret();
+  if (!/^[a-p]{32}$/.test(extId || "") || !SECRET_RE.test(secret)) throw new Error("geen geldig extensie-ID of geheim");
   const files = await Promise.all(HELPER_FILES.map(async (f) => [f, (await read(`helper/${f}`)).trimEnd()]));
-  if (/^[a-p]{32}$/.test(extId || "")) {
-    files.push(["config.json", JSON.stringify({ origins: [`chrome-extension://${extId}`] })]);
-  }
+  files.push(["config.json", JSON.stringify({ origins: [`chrome-extension://${extId}`], secret })]);
   if (os === "win" || os === "winps") {
     const setup = (await read("helper/setup.ps1")).trimEnd();
     let out = '$d = "$env:USERPROFILE\\.host-override"\nNew-Item -ItemType Directory -Force -Path $d | Out-Null\n';
@@ -121,7 +193,8 @@ export async function buildSetupCommand(os, read, extId = chrome.runtime.id) {
     return out + setup + "\n";
   }
   const setup = (await read("helper/setup.sh")).trimEnd();
-  let out = "mkdir -p ~/.host-override\n";
+  // Map eerst afschermen (0700), zodat config.json met het geheim nooit voor anderen leesbaar is.
+  let out = "mkdir -p ~/.host-override && chmod 700 ~/.host-override\n";
   files.forEach(([name, text], i) => {
     out += `cat > ~/.host-override/${name} <<'HO_FILE_${i}_EOF'\n${text}\nHO_FILE_${i}_EOF\n`;
   });

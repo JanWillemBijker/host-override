@@ -1,6 +1,6 @@
 import {
   activeRules, matchRule, isHost, isIp, formatHosts, parseHosts,
-  OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected,
+  OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch,
 } from "./common.js";
 import { initI18n, t } from "./i18n.js";
 
@@ -71,11 +71,16 @@ function showHelperCard(kind) {
     $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Koppel helper");
     $("helperTitle").textContent = t("Eenmalig: installeer de helper");
     $("helperText").textContent = t("Chrome kan zelf geen IP-adressen koppelen. Een klein lokaal programma (helper) doet dat. Het draait alleen op je eigen computer.");
+  } else if (kind === "setup") {
+    $("hbarText").textContent = t("Helper moet opnieuw worden ingesteld");
+    $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Stel helper in");
+    $("helperTitle").textContent = t("Helper moet opnieuw worden ingesteld");
+    $("helperText").textContent = t("De helper herkent deze extensie niet (de geheime sleutel ontbreekt of klopt niet). Plak het setup-commando hieronder nog één keer. Blijft deze melding, dan gebruikt een ander programma poort 8899.");
   } else {
     $("hbarText").textContent = t("Helper-update beschikbaar");
     $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Update helper");
     $("helperTitle").textContent = t("Helper-update beschikbaar");
-    $("helperText").textContent = t("Deze extensie heeft een nieuwere helper nodig. Voer het commando opnieuw uit.");
+    $("helperText").textContent = t("Deze versie van de extensie beveiligt de helper met een geheime sleutel. Kopieer het setup-commando hieronder en plak het nog één keer in je terminal. Tot dan staan je regels op pauze.");
   }
   $("hbarBtn").setAttribute("aria-expanded", String(helperOpen));
 }
@@ -92,8 +97,9 @@ async function refreshStatus(state) {
     return;
   }
   showHelp("");
-  showHelperCard(!s.reachable ? "missing" : s.outdated ? "outdated" : null);
+  showHelperCard(!s.reachable ? "missing" : s.outdated ? "outdated" : s.setup ? "setup" : null);
   if (!s.reachable) { setStatus("bad", t("Helper draait niet")); return; }
+  if (s.outdated || s.setup) return;
   if (s.blocked) {
     setStatus("bad", t("Een andere extensie beheert de proxy"));
     showHelp(t("Zet de andere proxy- of VPN-extensie uit via chrome://extensions."));
@@ -304,18 +310,17 @@ $("openWin").onclick = async () => {
   const active = rules.filter((r) => r.enabled !== false).map(({ host, ip }) => ({ host, ip }));
   const btn = $("openWin");
   try {
-    const res = await fetch("http://127.0.0.1:8899/__launch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Host-Override": "1" },
-      body: JSON.stringify({ rules: active, url: tab?.url }),
-    });
+    // Alleen origin + pad: de query (kan tokens bevatten) hoort niet in de opdrachtregel van Chrome.
+    const u = tab?.url ? new URL(tab.url) : null;
+    const res = await helperFetch("/__launch", { body: { rules: active, url: u ? u.origin + u.pathname : undefined } });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || `status ${res.status}`);
     $("moreErr").textContent = "";
     btn.textContent = t("Geopend");
     setTimeout(() => (btn.textContent = t("Open testvenster")), 2000);
   } catch (e) {
-    $("moreErr").textContent = t("Openen mislukt ({e}). Gebruik \"Kopieer commando\".", { e: e.message });
+    const msg = { "helper-missing": t("helper draait niet"), "helper-outdated": t("helper-update nodig"), "helper-setup": t("helper moet opnieuw worden ingesteld"), setup: t("helper moet opnieuw worden ingesteld") }[e.message] || e.message;
+    $("moreErr").textContent = t("Openen mislukt ({e}). Gebruik \"Kopieer commando\".", { e: msg });
   }
 };
 $("copyCmd").onclick = () => copy($("cmdText").value, $("copyCmd"), t("Gekopieerd, plak in je terminal"));

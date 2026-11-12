@@ -13,6 +13,11 @@ if ($PSCommandPath) {
   }
 }
 if (-not (Test-Path $proxy)) { Write-Host "proxy.js ontbreekt in $dir"; exit 1 }
+$cfg = Join-Path $dir "config.json"
+if (-not (Test-Path $cfg) -or -not (Select-String -Path $cfg -Pattern '"secret"' -Quiet)) {
+  Write-Host "Let op: $cfg met het geheim van de extensie ontbreekt. De helper weigert dan alle opdrachten."
+  Write-Host "Kopieer het setup-commando uit de extensie en plak dat in PowerShell."
+}
 
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) {

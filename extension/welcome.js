@@ -1,4 +1,4 @@
-import { OS_LABELS, detectOS, buildSetupCommand } from "./common.js";
+import { OS_LABELS, detectOS, buildSetupCommand, helperStatus, EXPECTED_HELPER } from "./common.js";
 import { initI18n, t } from "./i18n.js";
 
 await initI18n();
@@ -33,18 +33,18 @@ $("copy").onclick = async () => {
   setTimeout(() => ($("copy").textContent = t("Kopieer setup-commando")), 2000);
 };
 
-// Controleer elke 2 seconden of de helper draait.
+// Controleer elke 2 seconden of de helper draait en deze extensie herkent (bewijs met het geheim).
 async function poll() {
-  try {
-    const r = await fetch("http://127.0.0.1:8899/__status");
-    if (r.ok) {
-      $("state").className = "state ok";
-      $("stateText").textContent = t("Helper actief. Je bent klaar voor stap 2.");
-      return;
-    }
-  } catch { /* helper draait nog niet */ }
+  const st = await helperStatus();
+  if (st.verified) {
+    $("state").className = "state ok";
+    $("stateText").textContent = t("Helper actief. Je bent klaar voor stap 2.");
+    return;
+  }
   $("state").className = "state wait";
-  $("stateText").textContent = t("Wachten op de helper...");
+  $("stateText").textContent = !st.reachable ? t("Wachten op de helper...")
+    : st.version < EXPECTED_HELPER ? t("Er draait een oudere helper. Plak het commando om hem bij te werken.")
+    : t("De helper draait, maar herkent deze extensie nog niet. Plak het commando hierboven.");
   setTimeout(poll, 2000);
 }
 

@@ -1,7 +1,6 @@
-import { isHost, isIp, matchRule } from "./common.js";
+import { isHost, isIp, matchRule, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
 import { t } from "./i18n.js";
 
-const BASE = "http://127.0.0.1:8899";
 const RESOLVERS = [
   ["system", "Systeem (jouw computer)"], ["1.1.1.1", "Cloudflare 1.1.1.1"], ["8.8.8.8", "Google 8.8.8.8"],
   ["9.9.9.9", "Quad9 9.9.9.9"], ["208.67.222.222", "OpenDNS 208.67.222.222"],
@@ -37,10 +36,16 @@ function ttl(s) {
 }
 
 async function api(path, body) {
-  const r = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Host-Override": "1" }, body: JSON.stringify(body) });
+  let r;
+  try { r = await helperFetch(path, { body }); } catch (e) { throw new Error(helperError(e.message)); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || `status ${r.status}`);
+  if (!r.ok) throw new Error(helperError(j.error || `status ${r.status}`));
   return j;
+}
+function helperError(code) {
+  const m = { "helper-missing": t("De helper draait niet."), "helper-outdated": t("De helper moet worden bijgewerkt."),
+    "helper-setup": t("Helper moet opnieuw worden ingesteld"), setup: t("Helper moet opnieuw worden ingesteld") };
+  return m[code] || code;
 }
 const dnsq = (name, type, server = "system", rd = true) => api("/__dns", { name, type, server, rd });
 const attempt = async (p) => { try { return { ok: true, v: await p }; } catch (e) { return { ok: false, e: e.message }; } };
@@ -339,14 +344,13 @@ async function start() {
   if (tIp && !isIp(tIp)) { $("err").textContent = t("Het test-IP is ongeldig."); return; }
   $("banner").hidden = true;
   $("dHint").hidden = true;
-  let st;
-  try { st = await (await fetch(BASE + "/__status")).json(); } catch { st = null; }
-  if (!st || st.helper < 4) {
+  const st = await helperStatus();
+  if (!st.verified) {
     $("dResults").hidden = true;
     $("banner").hidden = false;
     $("banner").textContent = "";
     $("banner").append(
-      h("strong", {}, st ? t("De helper moet worden bijgewerkt.") : t("De helper draait niet.")),
+      h("strong", {}, !st.reachable ? t("De helper draait niet.") : st.version < EXPECTED_HELPER ? t("De helper moet worden bijgewerkt.") : t("Helper moet opnieuw worden ingesteld")),
       h("p", {}, t("Voor de DNS-check is de helper nodig (hij doet de DNS-vragen rechtstreeks, zoals dig). Koppel hem via het tabje Regels.") + " "),
       h("a", { href: "welcome.html", target: "_blank" }, t("Open de installatie-uitleg")));
     return;

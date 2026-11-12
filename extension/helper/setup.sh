@@ -1,13 +1,17 @@
 #!/bin/bash
 # Host Override helper: zet de lokale proxy klaar en start hem automatisch bij inloggen.
 # macOS: LaunchAgent. Linux: systemd-gebruikersservice (of autostart). Mag vaker uitgevoerd worden.
+# Optioneel (installatie vanuit de map, zie install.sh): HO_EXT_ID en HO_SECRET schrijven config.json.
+# Het setup-commando uit de extensie schrijft config.json zelf.
 set -euo pipefail
+umask 077 # alles wat hier aangemaakt wordt is alleen voor de eigen gebruiker
 
 OS="${HO_OS:-$(uname)}"
 LABEL="com.hostoverride.proxy"
 APP_DIR="$HOME/.host-override"
 
 mkdir -p "$APP_DIR"
+chmod 700 "$APP_DIR"
 SRC="${BASH_SOURCE[0]:-}"
 if [ -n "$SRC" ] && [ -f "$(dirname "$SRC")/proxy.js" ]; then
   cp "$(dirname "$SRC")/proxy.js" "$(dirname "$SRC")/dnstools.js" "$APP_DIR/"
@@ -17,11 +21,32 @@ if [ ! -f "$APP_DIR/proxy.js" ]; then
   exit 1
 fi
 
+if [ -n "${HO_EXT_ID:-}" ] || [ -n "${HO_SECRET:-}" ]; then
+  if ! [[ "${HO_EXT_ID:-}" =~ ^[a-p]{32}$ ]] || ! [[ "${HO_SECRET:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Ongeldig extensie-ID (32 letters a-p) of geheim (64 hex-tekens)." >&2
+    exit 1
+  fi
+  printf '{"origins":["chrome-extension://%s"],"secret":"%s"}\n' "$HO_EXT_ID" "$HO_SECRET" > "$APP_DIR/config.json"
+fi
+# Bestaande bestanden (van een oudere versie) alleen leesbaar voor de eigen gebruiker.
+find "$APP_DIR" -maxdepth 1 -type f -exec chmod 600 {} +
+if [ ! -f "$APP_DIR/config.json" ] || ! grep -q '"secret"' "$APP_DIR/config.json"; then
+  echo "Let op: $APP_DIR/config.json met het geheim van de extensie ontbreekt." >&2
+  echo "De helper weigert dan alle opdrachten. Kopieer het setup-commando uit de extensie en plak dat." >&2
+fi
+
 NODE="$(command -v node || true)"
 if [ -z "$NODE" ]; then
   echo "Node.js niet gevonden. Installeer het (https://nodejs.org) en voer dit daarna opnieuw uit." >&2
   exit 1
 fi
+
+# Escapen voor de bestanden hieronder (paden kunnen spaties of speciale tekens bevatten).
+xml_esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+# systemd: argument tussen dubbele aanhalingstekens; \ en " escapen, $ -> $$ en % -> %% (specifiers).
+q_systemd() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//\$/\$\$}"; printf '"%s"' "${s//%/%%}"; }
+# .desktop Exec: binnen "..." \ " ` $ escapen, daarna elke \ nogmaals (stringregel van .desktop) en % -> %%.
+q_desktop() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//\`/\\\`}"; s="${s//\$/\\\$}"; s="${s//\\/\\\\}"; printf '"%s"' "${s//%/%%}"; }
 
 if [ "$OS" = "Darwin" ]; then
   PLIST_DIR="${PLIST_DIR:-$HOME/Library/LaunchAgents}"
@@ -36,13 +61,13 @@ if [ "$OS" = "Darwin" ]; then
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$NODE</string>
-    <string>$APP_DIR/proxy.js</string>
+    <string>$(xml_esc "$NODE")</string>
+    <string>$(xml_esc "$APP_DIR/proxy.js")</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$LOG</string>
-  <key>StandardErrorPath</key><string>$LOG</string>
+  <key>StandardOutPath</key><string>$(xml_esc "$LOG")</string>
+  <key>StandardErrorPath</key><string>$(xml_esc "$LOG")</string>
 </dict>
 </plist>
 PLIST
@@ -59,7 +84,7 @@ elif [ "$OS" = "Linux" ]; then
 Description=Host Override proxy
 
 [Service]
-ExecStart=$NODE $APP_DIR/proxy.js
+ExecStart=$(q_systemd "$NODE") $(q_systemd "$APP_DIR/proxy.js")
 Restart=always
 RestartSec=2
 
@@ -79,14 +104,14 @@ UNIT
 [Desktop Entry]
 Type=Application
 Name=Host Override proxy
-Exec=$NODE $APP_DIR/proxy.js
+Exec=$(q_desktop "$NODE") $(q_desktop "$APP_DIR/proxy.js")
 X-GNOME-Autostart-enabled=true
 DESK
     pkill -f "$APP_DIR/proxy.js" 2>/dev/null || true
     nohup "$NODE" "$APP_DIR/proxy.js" >"$APP_DIR/proxy.log" 2>&1 &
   fi
 else
-  echo "Onbekend systeem ($OS). Start de helper zelf met: $NODE $APP_DIR/proxy.js"
+  echo "Onbekend systeem ($OS). Start de helper zelf met: \"$NODE\" \"$APP_DIR/proxy.js\""
   exit 0
 fi
 

@@ -20,7 +20,11 @@ Je hebt [Node.js](https://nodejs.org) nodig.
 
 Laat "Toestaan in incognito" uit (standaard uit).
 
-De helper start voortaan zelf bij inloggen (macOS: LaunchAgent, Linux: systemd-gebruikersservice of autostart, Windows: Opstarten-map). Vanuit deze map kan het ook met `./install.sh` (macOS/Linux) of `extension/helper/setup.ps1` (Windows).
+De helper start voortaan zelf bij inloggen (macOS: LaunchAgent, Linux: systemd-gebruikersservice of autostart, Windows: Opstarten-map).
+
+Het setup-commando bevat een geheime sleutel die de extensie bij de eerste start aanmaakt. Het commando schrijft die met het extensie-ID in `~/.host-override/config.json` (alleen leesbaar voor jou). De helper voert alleen opdrachten uit die die sleutel meesturen, en bewijst bij elke statuscontrole dat hij de sleutel kent; anders stuurt de extensie hem niets. Zonder geldige `config.json` weigert de helper alles.
+
+Vanuit deze map kan het ook met `./install.sh <extensie-id> <geheim>` (macOS/Linux), maar het geheim staat alleen in de extensie: het setup-commando plakken is eenvoudiger. `./install.sh` zonder argumenten laat een bestaande `config.json` staan. Windows: `extension/helper/setup.ps1` na het plakken van het setup-commando.
 
 ## Gebruiken
 
@@ -32,7 +36,7 @@ De helper start voortaan zelf bij inloggen (macOS: LaunchAgent, Linux: systemd-g
 - De tab wordt automatisch herladen (zonder cache) als een wijziging die tab raakt. Uit te zetten onderin.
 - Sneltoets **Alt+Shift+H** zet alles aan of uit (wijzigen via `chrome://extensions/shortcuts`).
 - **Testvenster** opent met één klik een tweede Chrome (eigen profiel `chrome-test`) dat jouw regels gebruikt, met de huidige pagina. Handig voor twee vensters naast elkaar. De helper start dat venster. Lukt dat niet, dan kopieer je het commando (macOS, Windows cmd of PowerShell, Linux) en plak je het zelf in je terminal. Het commando werkt ook zonder helper.
-- **DNS-check** is een tab in de popup zelf (naast Regels), met subtabs voor Samenvatting, Records, Nameservers, Resolvers, Servers en E-mail. Het doet alles wat je anders met `dig` doet: records (A, AAAA, CNAME, MX, NS, TXT, SOA, CAA met TTL), de delegatie vanaf de root, elke nameserver rechtstreeks bevraagd (authoritative, SOA-serial, A-record), vergelijking van resolvers (systeem, Cloudflare, Google, Quad9, OpenDNS) om te zien of een wijziging overal door is, SPF en DMARC, en een servercontrole per IP: HTTP en HTTPS met de juiste hostnaam, redirect, certificaat (geldig voor het domein, vertrouwd, verloopdatum) en reverse DNS. Staat er een override voor het domein, dan vergelijkt het live en test naast elkaar. Bovenaan staat een samenvatting met fouten en aandachtspunten, en je kopieert het rapport met één klik. Dit werkt via de helper (versie 5). De check start automatisch voor de huidige site, secties met problemen klappen vanzelf open, je kunt een test-IP invullen om live en test te vergelijken, en recente domeinen worden onthouden.
+- **DNS-check** is een tab in de popup zelf (naast Regels), met subtabs voor Samenvatting, Records, Nameservers, Resolvers, Servers en E-mail. Het doet alles wat je anders met `dig` doet: records (A, AAAA, CNAME, MX, NS, TXT, SOA, CAA met TTL), de delegatie vanaf de root, elke nameserver rechtstreeks bevraagd (authoritative, SOA-serial, A-record), vergelijking van resolvers (systeem, Cloudflare, Google, Quad9, OpenDNS) om te zien of een wijziging overal door is, SPF en DMARC, en een servercontrole per IP: HTTP en HTTPS met de juiste hostnaam, redirect, certificaat (geldig voor het domein, vertrouwd, verloopdatum) en reverse DNS. Staat er een override voor het domein, dan vergelijkt het live en test naast elkaar. Bovenaan staat een samenvatting met fouten en aandachtspunten, en je kopieert het rapport met één klik. Dit werkt via de helper (versie 6). De check start automatisch voor de huidige site, secties met problemen klappen vanzelf open, je kunt een test-IP invullen om live en test te vergelijken, en recente domeinen worden onthouden.
 - **Delen** toont je regels in hosts-formaat. Plakken bij een collega en "Toevoegen uit tekst" kiezen is genoeg.
 
 ## Delen en Chrome Web Store
@@ -47,6 +51,7 @@ De extensie bevat alles (ook de helper), dus delen is alleen de extensie delen.
 | Melding | Oplossing |
 | --- | --- |
 | "Helper draait niet" | Plak het setup-commando opnieuw (uit de popup of welkomstpagina). Controle: open `http://127.0.0.1:8899` |
+| "Helper-update beschikbaar" of "Helper moet opnieuw worden ingesteld" | Kopieer het setup-commando uit de popup en plak het nog één keer. Blijft de melding, kijk dan wat er op poort 8899 draait (`lsof -i :8899`). Tot het is opgelost gaan domeinen op je lijst nergens heen (foutmelding in plaats van een verkeerde server). |
 | "Een andere extensie beheert de proxy" | Zet andere proxy- of VPN-extensies uit |
 | Certificaatfout | De testserver moet een geldig certificaat voor dat domein hebben |
 | Oude site blijft staan | Hard verversen of tab sluiten en opnieuw openen |
@@ -61,7 +66,7 @@ macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Ver
 ## Beperkingen
 
 - De helper-installatie op Windows en Linux is geschreven en syntactisch gecontroleerd, maar nog niet op die systemen uitgeprobeerd.
-- Poort 8899 staat vast (`extension/common.js`, `extension/helper/proxy.js`).
+- Poort 8899 staat vast (`extension/common.js`, `extension/helper/proxy.js`; voor tests kan de helper met `PORT=...` op een andere poort).
 - Het IP geldt voor alle poorten van dat domein.
 - In incognito is de extensie uit, dus daar zie je geen IP-kaart.
 
@@ -81,6 +86,6 @@ macOS en Linux: `./uninstall.sh`. Windows: `extension/helper/uninstall.ps1`. Ver
 
 ## Wat is er nieuw in 1.7.0
 - **Klaar voor de Chrome Web Store:** nieuwe teksten, rechtvaardigingen en privacybeleid in `store/`, schermafbeeldingen en promotegels (NL en EN) in `store/images/`. Gemaakt door [BijBijker](https://bijbijker.nl), met een kleine credit onderin popup, zijpaneel en welkomstpagina.
-- **Veiligheid helper (versie 5):** het setup-commando legt het ID van de extensie vast (`~/.host-override/config.json`); de helper accepteert daarna alleen nog opdrachten van precies die extensie, en alleen via `127.0.0.1`/`localhost` (bescherming tegen DNS-rebinding). Na het bijwerken van de extensie vraagt de popup om het setup-commando nog één keer te plakken.
+- **Veiligheid helper (versie 6):** de extensie maakt een geheime sleutel (32 willekeurige bytes) en het setup-commando legt die met het extensie-ID vast in `~/.host-override/config.json` (map 0700, bestanden 0600). De helper voert alleen opdrachten uit met die sleutel (plus de controles op Origin en `127.0.0.1`/`localhost` tegen DNS-rebinding), en weigert alles zonder geldige config. Voordat de extensie iets stuurt, moet de helper met een HMAC over een willekeurige nonce bewijzen dat hij de sleutel kent; lukt dat niet (bijvoorbeeld een ander programma op poort 8899), dan toont het icoon "!" en gaan er geen regels of verkeer naartoe. Verder: testvenster krijgt alleen origin + pad van de pagina (geen query), maximaal 512 verbindingen en time-outs in de proxy, andere poorten dan 80/443/8443 alleen voor domeinen met een regel, en DNS-antwoorden worden alleen geaccepteerd van de gevraagde server. Na het bijwerken van de extensie vraagt de popup om het setup-commando nog één keer te plakken.
 - **Strengere invoercontrole:** domeinen (labels a-z, 0-9, -, max 63 tekens, optioneel `*.`) en IP's (IPv4 zonder voorloopnullen, geldige IPv6) worden overal hetzelfde gecontroleerd: popup, PAC-regel, testvenster-commando en helper.
 - **Toegankelijkheid:** betere contrasten (AA) in licht en donker, zichtbare focus op alle bedieningselementen, foutmeldingen op de tab Meer staan nu ook op die tab, sneltoets en TEST-label vertaald.
