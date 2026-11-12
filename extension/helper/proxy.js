@@ -28,7 +28,8 @@ const CONFIG = path.join(DIR, "config.json");
 const HOST_RE = /^(\*\.)?(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/i;
 const isHost = (h) => typeof h === "string" && h.length <= 255 && HOST_RE.test(h);
 // Doel als hostnaam: geen wildcard, max 253, laatste label bevat een letter (zelfde regel als de extensie).
-const isTargetHost = (h) => typeof h === "string" && h.length <= 253 && !h.startsWith("*.") && HOST_RE.test(h) && /[a-z]/i.test(h.slice(h.lastIndexOf(".") + 1));
+const isTargetHost = (h) => typeof h === "string" && h.length <= 253 && !h.startsWith("*.") && HOST_RE.test(h) &&
+  (h.includes(".") || h.toLowerCase() === "localhost") && /[a-z]/i.test(h.slice(h.lastIndexOf(".") + 1));
 const isTarget = (t) => typeof t === "string" && (net.isIP(t) > 0 || isTargetHost(t));
 
 // Wie de helper mag aansturen. Het setup-commando uit de extensie schrijft config.json met het ID van die

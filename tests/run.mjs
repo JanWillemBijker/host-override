@@ -20,6 +20,7 @@ const tools = require(path.join(EXT, "helper", "dnstools.js"));
 const { classify, normIp, sameNet, triggers } = await import(path.join(EXT, "detect.js"));
 const { normIndicator, renderLabel, textColor, INDICATOR_DEFAULTS } = await import(path.join(EXT, "indicator.js"));
 const M = await import(path.join(EXT, "model.js"));
+const { fetchSubList } = await import(path.join(EXT, "subs.js"));
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -168,7 +169,7 @@ await test("migratie: losse regels (1.7) komen in de standaardgroep, ongeldige v
 });
 await test("doel: IP of strikte hostnaam; geen wildcard, geen numerieke TLD, geen shell-tekens", () => {
   for (const ok of ["1.2.3.4", "2001:db8::1", "server123.hostingpartij.nl", "localhost", "a-b.example.co.uk"]) assert.ok(M.isTarget(ok), ok);
-  for (const bad of ["*.x.nl", "999.1.1.1", "10.0.0", "a b.nl", "x.nl;id", "$(id).nl", "-a.nl", "a..nl", "", "x".repeat(254) + ".nl", "http://x.nl"]) assert.ok(!M.isTarget(bad), bad);
+  for (const bad of ["*.x.nl", "999.1.1.1", "10.0.0", "rommel", "intranet", "a b.nl", "x.nl;id", "$(id).nl", "-a.nl", "a..nl", "", "x".repeat(254) + ".nl", "http://x.nl"]) assert.ok(!M.isTarget(bad), bad);
   assert.equal(M.targetKind("srv.x.nl"), "host"); assert.equal(M.targetKind("1.2.3.4"), "ip");
 });
 await test("groep uit = regels uit; hoofdschakelaar uit = alles uit; eerste treffer wint", () => {
@@ -250,6 +251,89 @@ await test("verbindingen: regel / hosts-bestand / live, en 'nog live' bij hetzel
   assert.ok(!by["fonts.gstatic.com"].stillLive);
   assert.deepEqual(a.rows.slice(0, 2).map((r) => r.host).sort(), ["cdn.shop.nl", "shop.nl"], "nog live bovenaan");
   assert.equal(a.total, 9); assert.equal(a.types.image, 4); assert.equal(a.stillLive, 2); assert.equal(a.viaRule, 1);
+});
+
+console.log("Abonnementen, sync en back-up");
+const fakeFetch = (body, { status = 200, url, headers = {} } = {}) => async (u) => {
+  const r = new Response(body, { status, headers });
+  Object.defineProperty(r, "url", { value: url || u });
+  return r;
+};
+await test("abonnement: alleen https, geen inloggegevens; geldige lijst met groepskop wordt gelezen", async () => {
+  await assert.rejects(fetchSubList("http://x.nl/l.txt", { fetchFn: fakeFetch("") }), { code: "https" });
+  await assert.rejects(fetchSubList("https://u:p@x.nl/l.txt", { fetchFn: fakeFetch("") }), { code: "credentials" });
+  await assert.rejects(fetchSubList("javascript:alert(1)", { fetchFn: fakeFetch("") }), { code: "https" });
+  await assert.rejects(fetchSubList("https://x.nl/l.txt", { fetchFn: fakeFetch(""), hasPermission: async () => false }), { code: "permission" });
+  const r = await fetchSubList("https://x.nl/l.txt", { fetchFn: fakeFetch("# group: Team staging #2b8a3e\n10.0.0.1 a.nl # db\nrommel\nsrv.host.nl b.nl\n") });
+  assert.equal(r.rules.length, 2); assert.equal(r.skipped, 1); assert.equal(r.groups[0].name, "Team staging"); assert.equal(r.rules[0].note, "db");
+});
+await test("abonnement: foutcodes (HTTP-status, te groot, HTML, leeg, doorverwijzing naar http)", async () => {
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("nope", { status: 404 }) }), { code: "http-404" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("1.1.1.1 a.nl\n".repeat(30000)) }), { code: "too-big" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("x", { headers: { "content-length": String(10 * 1024 * 1024) } }) }), { code: "too-big" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("<!doctype html><p>login") }), { code: "not-hosts" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("# alleen commentaar\n") }), { code: "no-rules" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: fakeFetch("1.1.1.1 a.nl", { url: "http://x.nl/l" }) }), { code: "https" });
+  await assert.rejects(fetchSubList("https://x.nl/l", { fetchFn: async () => { throw new TypeError("Failed to fetch"); } }), { code: "network" });
+});
+await test("abonnementsregels: alleen-lezen in een eigen groep, eigen regel wint bij dezelfde host", () => {
+  const s = M.normState({ enabled: true, rules: [{ host: "a.nl", ip: "9.9.9.9" }], subs: [{ id: "s1", url: "https://x.nl/l.txt", rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "b.nl", ip: "2.2.2.2" }] }] });
+  const g = s.groups.find((x) => x.sub === "s1");
+  assert.ok(g && g.id === "sub-s1");
+  const all = M.allRules(s);
+  assert.deepEqual(all.map((r) => [r.host, r.ip, !!r.readOnly]), [["a.nl", "9.9.9.9", false], ["a.nl", "1.1.1.1", true], ["b.nl", "2.2.2.2", true]]);
+  assert.equal(M.matchRule(M.activeRules(s), "a.nl").ip, "9.9.9.9");
+  assert.equal(M.normState({ subs: [{ id: "s1", url: "http://x.nl" }] }).subs.length, 0, "http-abonnement valt weg");
+  assert.equal(M.normState({ groups: [{ id: "sub-s9", sub: "s9" }] }).groups.length, 1, "groep van opgezegd abonnement verdwijnt");
+});
+await test("sync: nooit het helper-geheim of wachtwoorden; stukken < 8 KB; heen en terug; kapotte stukken = null", () => {
+  const raw = { enabled: true, helperSecret: "a".repeat(64), lang: "en", indicator: { color: "#1971c2" },
+    groups: [{ id: "default" }, { id: "stg", name: "Staging – ü", auth: { user: "jan", pass: "geheim" }, headers: [{ name: "X-A", value: "1" }] }],
+    rules: Array.from({ length: 400 }, (_, i) => ({ host: `host${i}.voorbeeld-met-een-lange-naam.nl`, ip: `10.0.${i >> 8}.${i & 255}`, group: i % 2 ? "stg" : "default", note: "notitie " + i })),
+    subs: [{ id: "s1", url: "https://x.nl/l.txt", rules: [{ host: "z.nl", ip: "1.1.1.1" }] }] };
+  const p = M.syncPayload(raw);
+  const json = JSON.stringify(p);
+  assert.ok(!json.includes("a".repeat(64)) && !json.includes("geheim"), "geen geheim/wachtwoord");
+  assert.ok(!json.includes("z.nl"), "opgehaalde abonnementsregels gaan niet mee");
+  assert.equal(p.settings.lang, "en"); assert.equal(p.settings.enabled, undefined);
+  const { meta, items } = M.encodeSync(p, { ts: 5, dev: "d1" });
+  assert.ok(meta.n > 1);
+  for (const [k, v] of Object.entries(items)) assert.ok(new TextEncoder().encode(k + JSON.stringify(v)).length < 8192, k);
+  assert.ok(meta.bytes < M.SYNC_MAX);
+  assert.deepEqual(M.decodeSync({ "ho:meta": meta, ...items }), p);
+  assert.equal(M.decodeSync({ "ho:meta": meta, ...items, "ho:c0": items["ho:c0"].slice(1) }), null, "half binnengekomen");
+  assert.equal(M.decodeSync({ "ho:meta": { ...meta, n: 99 }, ...items }), null);
+  // Toepassen op een andere computer: wachtwoord blijft lokaal, opgehaalde lijst blijft, hoofdschakelaar ongemoeid.
+  const other = { enabled: false, groups: [{ id: "default" }, { id: "stg", auth: { user: "jan", pass: "lokaal" } }], subs: [{ id: "old", url: "https://x.nl/l.txt", rules: [{ host: "q.nl", ip: "3.3.3.3" }] }] };
+  const out = M.applySync(other, M.decodeSync({ "ho:meta": meta, ...items }), "replace");
+  assert.equal(out.rules.length, 400); assert.equal(out.lang, "en"); assert.equal(out.enabled, undefined);
+  assert.equal(out.groups.find((g) => g.id === "stg").auth.pass, "lokaal");
+  assert.equal(out.subs[0].rules[0].host, "q.nl"); assert.equal(out.subs[0].id, "s1");
+  // Eerste keer: samenvoegen, lokaal wint bij dezelfde host.
+  const merged = M.applySync({ rules: [{ host: "host1.voorbeeld-met-een-lange-naam.nl", ip: "1.1.1.1" }, { host: "eigen.nl", ip: "2.2.2.2" }] }, p, "merge");
+  assert.equal(merged.rules.length, 401);
+  assert.equal(merged.rules.find((r) => r.host === "host1.voorbeeld-met-een-lange-naam.nl").ip, "1.1.1.1");
+});
+await test("back-up: geheim en wachtwoorden alleen als aangevinkt; voorbeeld; samenvoegen of vervangen", () => {
+  const raw = { enabled: true, helperSecret: "b".repeat(64), dohProvider: "google", groups: [{ id: "default" }, { id: "stg", auth: { user: "jan", pass: "pw" } }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "b.nl", ip: "srv.x.nl", group: "stg", note: "n" }], subs: [{ id: "s1", url: "https://x.nl/l", rules: [{ host: "z.nl", ip: "1.1.1.1" }] }] };
+  const plain = JSON.stringify(M.buildBackup(raw));
+  assert.ok(!plain.includes("b".repeat(64)) && !plain.includes('"pw"') && !plain.includes("z.nl"));
+  const full = M.buildBackup(raw, { includeSecrets: true });
+  assert.equal(full.secret, "b".repeat(64)); assert.equal(full.data.groups[1].auth.pass, "pw");
+  const b = M.readBackup(JSON.stringify(full));
+  assert.equal(b.secret, "b".repeat(64)); assert.equal(b.settings.dohProvider, "google");
+  const local = { rules: [{ host: "a.nl", ip: "9.9.9.9" }, { host: "c.nl", ip: "3.3.3.3" }] };
+  const pv = M.backupPreview(local, b);
+  assert.deepEqual([pv.rules, pv.added, pv.changed, pv.removed, pv.secret], [2, 1, 1, 1, true]);
+  const merged = M.applyBackup(local, b, "merge");
+  assert.deepEqual(merged.rules.map((r) => r.host).sort(), ["a.nl", "b.nl", "c.nl"]);
+  assert.equal(merged.rules.find((r) => r.host === "a.nl").ip, "1.1.1.1");
+  const replaced = M.applyBackup(local, b, "replace");
+  assert.deepEqual(replaced.rules.map((r) => r.host), ["a.nl", "b.nl"]);
+  for (const bad of ["{", "[]", JSON.stringify({ kind: "x", v: 1, data: {} }), "x".repeat(6 * 1024 * 1024)]) assert.throws(() => M.readBackup(bad));
+  const evil = M.readBackup(JSON.stringify({ kind: M.BACKUP_KIND, v: 1, data: { rules: [{ host: "a.nl;rm", ip: "1.1.1.1" }, { host: "ok.nl", ip: "$(id)" }], groups: [{ id: "../x", color: "red" }], settings: { helperSecret: "x", evil: 1 } }, secret: "nope" }));
+  assert.equal(evil.state.rules.length, 0); assert.equal(evil.secret, null); assert.deepEqual(Object.keys(evil.settings), []);
 });
 
 console.log("Verzoek-headers per groep (declarativeNetRequest)");

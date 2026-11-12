@@ -1,5 +1,7 @@
 import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected, getSecret, helperStatus, helperFetch, loadState, STATE_KEYS } from "./common.js";
-import { groupOf, groupName, activeGroups, normState, isTargetHost, isIp, buildDnrRules } from "./model.js";
+import { groupOf, groupName, activeGroups, normState, isTargetHost, isIp, buildDnrRules, subUrlProblem, subOrigin, subGroupId,
+  syncPayload, encodeSync, decodeSync, applySync, SYNC_MAX, SYNC_SETTINGS, GROUP_COLORS } from "./model.js";
+import { fetchSubList } from "./subs.js";
 import { classify, triggers, dohLookup, hostsLookup } from "./detect.js";
 import { normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
 import { t, setLang, resolveLang } from "./i18n.js";
@@ -121,6 +123,10 @@ applyPanel();
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.enabled || changes.rules || changes.groups || changes.subs)) apply();
+  if (area === "local" && Object.keys(changes).some((k) => SYNC_WATCH.has(k))) schedulePush();
+  if (area === "local" && changes.syncOn?.newValue === true) syncEnable();
+  if (area === "sync" && changes["ho:meta"]) syncPull("replace");
+  if (area === "local" && changes.subs) refreshDueSubs();
   if (area === "local" && changes.sideDefault) applyPanel();
   if (area === "local" && (changes.indicator || changes.pageBadge || changes.lang)) repaintAll();
 });
@@ -337,8 +343,118 @@ chrome.tabs.onRemoved.addListener((id) => {
 
 function startAlarm() {
   chrome.alarms.create("resync", { periodInMinutes: 1 });
+  chrome.alarms.create("subs", { periodInMinutes: 15 });
 }
-chrome.runtime.onStartup.addListener(async () => { startAlarm(); await migrate(); apply(); });
+
+// ---------- Abonnementen ----------
+const subHasPermission = (origin) => chrome.permissions.contains({ origins: [origin] });
+const subBusy = new Set();
+// Haalt één lijst op en bewaart het resultaat (of de foutcode). Leest de opslag opnieuw vlak voor het schrijven.
+async function refreshSub(id) {
+  if (subBusy.has(id)) return null;
+  subBusy.add(id);
+  try {
+    const { subs = [] } = await chrome.storage.local.get("subs");
+    const sub = subs.find((x) => x?.id === id);
+    if (!sub) return null;
+    let patch;
+    try {
+      const r = await fetchSubList(sub.url, { hasPermission: subHasPermission });
+      patch = { rules: r.rules.map(({ host, ip, enabled, note }) => (note ? { host, ip, enabled, note } : { host, ip, enabled })), error: "", lastOk: Date.now(), skipped: r.skipped };
+    } catch (e) {
+      patch = { error: e.code || "network" };
+    }
+    const now = await chrome.storage.local.get("subs");
+    const list = (now.subs || []).map((x) => (x?.id === id ? { ...x, ...patch, lastFetch: Date.now() } : x));
+    await chrome.storage.local.set({ subs: list });
+    return { ...patch, id };
+  } finally { subBusy.delete(id); }
+}
+async function refreshDueSubs() {
+  const { subs = [] } = await chrome.storage.local.get("subs");
+  const now = Date.now();
+  for (const s of subs) {
+    if (!s?.id || subBusy.has(s.id)) continue;
+    const due = !s.lastFetch || (s.interval > 0 && now - s.lastFetch >= s.interval * 60000);
+    // Zonder toestemming niet steeds opnieuw proberen: hooguit eens per uur (of na "Nu vernieuwen").
+    if (due && !(s.error === "permission" && now - s.lastFetch < 3600000)) await refreshSub(s.id);
+  }
+}
+async function addSub(url, interval) {
+  const problem = subUrlProblem(url);
+  if (problem) return { error: problem };
+  const raw = await chrome.storage.local.get(["subs", "groups"]);
+  const subs = Array.isArray(raw.subs) ? raw.subs : [];
+  const href = new URL(url).href;
+  if (subs.some((s) => s?.url === href)) return { error: "duplicate" };
+  let r;
+  try { r = await fetchSubList(href, { hasPermission: subHasPermission }); } catch (e) { return { error: e.code || "network" }; }
+  const id = "s" + crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+  const first = r.groups[0];
+  const group = { id: subGroupId(id), sub: id, name: first?.name || new URL(href).hostname, color: first?.color || GROUP_COLORS[7],
+    enabled: false, noCache: false, auth: null, headers: [] }; // eerst uit: de gebruiker zet de lijst bewust aan
+  const sub = { id, url: href, interval: [0, 60, 1440].includes(interval) ? interval : 1440, lastFetch: Date.now(), lastOk: Date.now(), error: "",
+    skipped: r.skipped, rules: r.rules.map(({ host, ip, enabled, note }) => (note ? { host, ip, enabled, note } : { host, ip, enabled })) };
+  const now = await chrome.storage.local.get(["subs", "groups"]);
+  await chrome.storage.local.set({ subs: [...(now.subs || []), sub], groups: [...(Array.isArray(now.groups) ? now.groups : normState({}).groups), group] });
+  return { ok: true, id, count: sub.rules.length, skipped: r.skipped };
+}
+
+// ---------- Sync tussen je eigen Chrome-installaties ----------
+// Opt-in (instelling "syncOn"). Nooit het helper-geheim of Basic-auth-wachtwoorden; zie syncPayload in model.js.
+const SYNC_WATCH = new Set(["rules", "groups", "subs", ...SYNC_SETTINGS]);
+let pushTimer = 0, applyingRemote = false;
+async function deviceId() {
+  let { deviceId: d } = await chrome.storage.local.get("deviceId");
+  if (!/^[0-9a-f]{16}$/.test(d || "")) { d = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join(""); await chrome.storage.local.set({ deviceId: d }); }
+  return d;
+}
+async function setSyncStatus(patch) {
+  const { syncStatus = {} } = await chrome.storage.local.get("syncStatus");
+  await chrome.storage.local.set({ syncStatus: { ...syncStatus, ...patch } });
+}
+function schedulePush() {
+  if (applyingRemote) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(syncPush, 2500);
+}
+async function syncPush() {
+  const raw = await chrome.storage.local.get(null);
+  if (!raw.syncOn || !chrome.storage.sync) return;
+  const { meta, items } = encodeSync(syncPayload(raw), { dev: await deviceId() });
+  try {
+    const cur = await chrome.storage.sync.get(null);
+    if (cur["ho:meta"]?.hash === meta.hash) return; // staat er al zo
+    if (meta.bytes > SYNC_MAX) { await setSyncStatus({ ok: false, error: "too-big", bytes: meta.bytes, at: Date.now() }); return; }
+    await chrome.storage.sync.set({ ...items, "ho:meta": meta });
+    const stale = Object.keys(cur).filter((k) => /^ho:c\d+$/.test(k) && Number(k.slice(4)) >= meta.n);
+    if (stale.length) await chrome.storage.sync.remove(stale);
+    await setSyncStatus({ ok: true, error: "", bytes: meta.bytes, at: Date.now(), pulledTs: meta.ts });
+  } catch (e) {
+    await setSyncStatus({ ok: false, error: /QUOTA|quota/.test(String(e)) ? "quota" : String(e.message || e).slice(0, 120), at: Date.now() });
+  }
+}
+async function syncPull(mode) {
+  const raw = await chrome.storage.local.get(null);
+  if (!raw.syncOn || !chrome.storage.sync) return false;
+  const all = await chrome.storage.sync.get(null);
+  const payload = decodeSync(all);
+  if (!payload) return false; // (nog) niet compleet: volgende wijziging afwachten
+  const meta = all["ho:meta"];
+  if (mode === "replace" && (meta.dev === (await deviceId()) || meta.ts <= (raw.syncStatus?.pulledTs || 0))) return false;
+  applyingRemote = true;
+  try {
+    await chrome.storage.local.set(applySync(raw, payload, mode));
+    await setSyncStatus({ ok: true, error: "", at: Date.now(), pulledTs: meta.ts, bytes: meta.bytes });
+  } finally { setTimeout(() => { applyingRemote = false; }, 50); }
+  return true;
+}
+// Eerste keer aanzetten: samenvoegen met wat er al in sync staat (lokaal wint bij dezelfde host), dan wegschrijven.
+async function syncEnable() {
+  await syncPull("merge");
+  setTimeout(syncPush, 300);
+}
+chrome.runtime.onStartup.addListener(async () => { startAlarm(); await migrate(); apply(); syncPull("replace").then(() => schedulePush()); refreshDueSubs(); });
 chrome.runtime.onInstalled.addListener(async (details) => {
   await getSecret(); // geheim voor de helper alvast aanmaken
   await migrate();
@@ -346,8 +462,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   apply();
   if (details.reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
 });
-// Houdt de helper in sync als die later (opnieuw) wordt gestart.
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === "resync") apply(); });
+// Houdt de helper in sync als die later (opnieuw) wordt gestart; abonnementen op tijd vernieuwen.
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === "resync") apply(); if (a.name === "subs") refreshDueSubs(); });
 
 // Sneltoets: aan/uit. De sneltoets geeft tijdelijk toegang tot de actieve tab (voor het herladen).
 chrome.commands.onCommand.addListener(async (cmd, tab) => {
@@ -361,6 +477,8 @@ chrome.commands.onCommand.addListener(async (cmd, tab) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
+  // Eigen extensiepagina (popup, zijpaneel, of popup.html in een tab); niet de indicator in een webpagina.
+  const ownPage = typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
   if (msg === "status") { status().then(sendResponse, (e) => sendResponse({ error: String(e) })); return true; }
   // Klik op de indicator: verbergen voor deze tab (tot de tab naar een andere site gaat of sluit).
   if (msg?.type === "ho-dismiss" && sender.tab?.id >= 0 && sender.frameId === 0 && /^https?:/.test(sender.url || "")) {
@@ -370,8 +488,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (rec) { rec.painted = false; await chrome.storage.session.set({ [`tab:${tabId}`]: rec }); }
     });
   }
+  // Popup: abonneren / vernieuwen (de achtergrond haalt de lijst op en is de enige die subs wegschrijft).
+  if (msg?.type === "ho-sub-add" && ownPage && typeof msg.url === "string") {
+    addSub(msg.url, Number(msg.interval)).then(sendResponse, (e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+  if (msg?.type === "ho-sub-refresh" && ownPage && typeof msg.id === "string") {
+    refreshSub(msg.id).then(sendResponse, (e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+  if (msg?.type === "ho-sync-now" && ownPage) {
+    syncPull("replace").then(() => syncPush()).then(() => sendResponse(true), () => sendResponse(false));
+    return true;
+  }
   // Popup: opnieuw beoordelen na "Opzoeken" (publieke DNS) of als de helper net gekoppeld is.
-  if (msg?.type === "ho-reevaluate" && !sender.tab && Number.isInteger(msg.tabId)) {
+  if (msg?.type === "ho-reevaluate" && ownPage && Number.isInteger(msg.tabId)) {
     chrome.storage.session.get(`tab:${msg.tabId}`).then(async ({ [`tab:${msg.tabId}`]: rec }) => {
       if (rec) { hostsMemo.delete(rec.host); await evaluate(msg.tabId, rec.host, rec.ip); }
       sendResponse(true);

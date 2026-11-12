@@ -21,10 +21,12 @@ export function isIp(ip) {
   try { return new URL(`http://[${ip}]/`).hostname.length > 2; } catch { return false; }
 }
 
-// Doel als hostnaam (bijvoorbeeld server123.hostingpartij.nl): geen wildcard, max 253 tekens, en het laatste
-// label bevat een letter (zodat "999.1.1.1" of "10.0.0" nooit als hostnaam doorgaat).
+// Doel als hostnaam (bijvoorbeeld server123.hostingpartij.nl): geen wildcard, max 253 tekens, minstens één punt
+// (of precies "localhost"), en het laatste label bevat een letter (zodat "999.1.1.1" of "10.0.0" nooit als
+// hostnaam doorgaat en een losse regel tekst als "rommel regel" geen regel wordt).
 export function isTargetHost(v) {
   if (typeof v !== "string" || v.length > 253 || v.startsWith("*.") || !HOST_RE.test(v)) return false;
+  if (!v.includes(".") && v.toLowerCase() !== "localhost") return false;
   return /[a-z]/i.test(v.slice(v.lastIndexOf(".") + 1));
 }
 export const isTarget = (v) => isIp(v) || isTargetHost(v);
@@ -134,6 +136,7 @@ export function normSub(s, i = 0) {
     lastFetch: Number.isFinite(s.lastFetch) ? s.lastFetch : 0,
     lastOk: Number.isFinite(s.lastOk) ? s.lastOk : 0,
     error: typeof s.error === "string" ? s.error.slice(0, 200) : "",
+    skipped: Number.isInteger(s.skipped) && s.skipped >= 0 ? s.skipped : 0,
     rules: (Array.isArray(s.rules) ? s.rules : []).slice(0, SUB_MAX_RULES).map((r) => normRule(r)).filter(Boolean)
       .map(({ host, ip, enabled, note }) => (note ? { host, ip, enabled, note } : { host, ip, enabled })),
   };
@@ -424,4 +427,135 @@ export function analyzeConnections(rec, active, hostsHits = {}) {
     viaRule: rows.filter((r) => r.kind === "rule").length, viaHosts: rows.filter((r) => r.kind === "hosts").length,
     stillLive: rows.filter((r) => r.stillLive).length,
   };
+}
+
+// ---------- Sync tussen je eigen Chrome-installaties (chrome.storage.sync) ----------
+// Wat meegaat: eigen regels, groepen (zonder Basic-auth-wachtwoord), abonnementen (alleen URL en interval,
+// niet de opgehaalde regels) en instellingen. Nooit het helper-geheim. Quota: ~100 KB totaal, 8 KB per item:
+// de JSON gaat als base64 in stukken van 7000 tekens ("ho:c0", "ho:c1", ...) met "ho:meta" erbij.
+export const SYNC_SETTINGS = ["indicator", "pageBadge", "autoReload", "lang", "exclusiveGroups", "dohProvider", "sideDefault"];
+export const SYNC_CHUNK = 7000;
+export const SYNC_MAX = 90 * 1024; // marge onder de 102400 bytes van chrome.storage.sync
+export function syncPayload(raw) {
+  const s = normState(raw);
+  const settings = {};
+  for (const k of SYNC_SETTINGS) if (raw[k] !== undefined) settings[k] = raw[k];
+  return {
+    rules: s.rules,
+    groups: s.groups.map((g) => ({ ...g, auth: g.auth ? { user: g.auth.user, pass: "" } : null })),
+    subs: s.subs.map(({ id, url, interval }) => ({ id, url, interval })),
+    settings,
+  };
+}
+const b64 = (str) => { const bytes = new TextEncoder().encode(str); let bin = ""; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin); };
+const unb64 = (s) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+export function hashStr(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); }
+export function encodeSync(payload, { ts = Date.now(), dev = "" } = {}) {
+  const data = b64(JSON.stringify(payload));
+  const items = {};
+  const n = Math.ceil(data.length / SYNC_CHUNK) || 1;
+  for (let i = 0; i < n; i++) items[`ho:c${i}`] = data.slice(i * SYNC_CHUNK, (i + 1) * SYNC_CHUNK);
+  const meta = { v: 1, ts, dev, n, hash: hashStr(data), bytes: data.length + n * 8 };
+  return { meta, items, data };
+}
+// Geeft de payload terug, of null als de stukken (nog) niet compleet of niet consistent zijn.
+export function decodeSync(all) {
+  const meta = all?.["ho:meta"];
+  if (!meta || meta.v !== 1 || !Number.isInteger(meta.n) || meta.n < 1 || meta.n > 20) return null;
+  let data = "";
+  for (let i = 0; i < meta.n; i++) { const c = all[`ho:c${i}`]; if (typeof c !== "string") return null; data += c; }
+  if (hashStr(data) !== meta.hash) return null;
+  try {
+    const p = JSON.parse(unb64(data));
+    return p && typeof p === "object" ? p : null;
+  } catch { return null; }
+}
+// Gegevens uit sync toepassen op de lokale opslag. Lokaal blijven: wachtwoorden (zelfde groep en gebruiker),
+// opgehaalde abonnementsregels (zelfde URL), de hoofdschakelaar en het helper-geheim.
+// mode "replace": sync wint. mode "merge" (eerste keer aanzetten): samenvoegen, lokaal wint bij dezelfde host.
+export function applySync(localRaw, payload, mode = "replace") {
+  const local = normState(localRaw);
+  const remote = normState({ rules: payload.rules, groups: payload.groups, subs: payload.subs });
+  const keepPass = (g) => {
+    const l = local.groups.find((x) => x.id === g.id);
+    return l?.auth && g.auth && l.auth.user === g.auth.user ? { ...g, auth: { ...g.auth, pass: l.auth.pass } } : g;
+  };
+  let groups = remote.groups.map(keepPass);
+  let rules = remote.rules;
+  let subs = remote.subs.map((s) => { const l = local.subs.find((x) => x.url === s.url); return l ? { ...l, id: s.id, interval: s.interval } : s; });
+  if (mode === "merge") {
+    for (const g of local.groups) if (!groups.some((x) => x.id === g.id)) groups.push(g);
+    const byHost = new Map(rules.map((r) => [r.host, r]));
+    for (const r of local.rules) byHost.set(r.host, r);
+    rules = [...byHost.values()];
+    for (const s of local.subs) if (!subs.some((x) => x.url === s.url)) subs.push(s);
+  }
+  const out = { rules, groups, subs };
+  const settings = payload.settings && typeof payload.settings === "object" ? payload.settings : {};
+  for (const k of SYNC_SETTINGS) if (settings[k] !== undefined && (mode === "replace" || localRaw[k] === undefined)) out[k] = settings[k];
+  const n = normState({ ...out, enabled: localRaw.enabled });
+  return { ...out, rules: n.rules, groups: n.groups, subs: n.subs };
+}
+
+// ---------- Back-up (JSON) ----------
+export const BACKUP_KIND = "host-override-backup";
+export const BACKUP_SETTINGS = [...SYNC_SETTINGS, "recentDomains", "collapsed", "syncOn"];
+export function buildBackup(raw, { includeSecrets = false, version = "" } = {}) {
+  const s = normState(raw);
+  const settings = {};
+  for (const k of BACKUP_SETTINGS) if (raw[k] !== undefined) settings[k] = raw[k];
+  const out = {
+    kind: BACKUP_KIND, v: 1, version, exported: new Date().toISOString(),
+    data: {
+      enabled: s.enabled,
+      rules: s.rules,
+      groups: includeSecrets ? s.groups : s.groups.map((g) => ({ ...g, auth: g.auth ? { user: g.auth.user, pass: "" } : null })),
+      subs: s.subs.map(({ id, url, interval }) => ({ id, url, interval })),
+      settings,
+    },
+  };
+  if (includeSecrets && /^[0-9a-f]{64}$/.test(raw.helperSecret || "")) out.secret = raw.helperSecret;
+  return out;
+}
+// Controleert een back-up en maakt een voorbeeld van de wijzigingen. Gooit een fout met een code bij ongeldige invoer.
+export function readBackup(text) {
+  if (typeof text !== "string" || text.length > 5 * 1024 * 1024) throw new Error("too-big");
+  let j;
+  try { j = JSON.parse(text); } catch { throw new Error("not-json"); }
+  if (!j || j.kind !== BACKUP_KIND || j.v !== 1 || !j.data || typeof j.data !== "object") throw new Error("not-backup");
+  const d = j.data;
+  const st = normState({ rules: d.rules, groups: d.groups, subs: d.subs, enabled: d.enabled });
+  const settings = {};
+  const src = d.settings && typeof d.settings === "object" ? d.settings : {};
+  for (const k of BACKUP_SETTINGS) if (src[k] !== undefined) settings[k] = src[k];
+  return { state: st, settings, secret: /^[0-9a-f]{64}$/.test(j.secret || "") ? j.secret : null, exported: typeof j.exported === "string" ? j.exported.slice(0, 40) : "" };
+}
+export function backupPreview(localRaw, b) {
+  const local = normState(localRaw);
+  const lm = new Map(local.rules.map((r) => [r.host, r]));
+  let added = 0, changed = 0, same = 0;
+  for (const r of b.state.rules) {
+    const o = lm.get(r.host);
+    if (!o) added++;
+    else if (o.ip !== r.ip || o.group !== r.group || (o.note || "") !== (r.note || "") || o.enabled !== r.enabled) changed++;
+    else same++;
+  }
+  return {
+    rules: b.state.rules.length, added, changed, same, removed: local.rules.filter((r) => !b.state.rules.some((x) => x.host === r.host)).length,
+    groups: b.state.groups.length, newGroups: b.state.groups.filter((g) => !local.groups.some((x) => x.id === g.id)).length,
+    subs: b.state.subs.length, settings: Object.keys(b.settings).length, secret: !!b.secret,
+  };
+}
+// mode "merge": back-up toevoegen (zelfde host: back-up wint, eigen extra regels blijven); "replace": alles vervangen.
+export function applyBackup(localRaw, b, mode = "merge") {
+  const local = normState(localRaw);
+  if (mode === "replace") return { enabled: b.state.enabled, rules: b.state.rules, groups: b.state.groups, subs: b.state.subs, ...b.settings };
+  const groups = [...local.groups];
+  for (const g of b.state.groups) { const i = groups.findIndex((x) => x.id === g.id); if (i >= 0) groups[i] = { ...g, auth: g.auth?.pass ? g.auth : groups[i].auth || g.auth }; else groups.push(g); }
+  const byHost = new Map(local.rules.map((r) => [r.host, r]));
+  for (const r of b.state.rules) byHost.set(r.host, r);
+  const subs = [...local.subs];
+  for (const s of b.state.subs) if (!subs.some((x) => x.url === s.url)) subs.push(s);
+  const n = normState({ rules: [...byHost.values()], groups, subs });
+  return { rules: n.rules, groups: n.groups, subs: n.subs, ...b.settings };
 }

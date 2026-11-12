@@ -229,6 +229,30 @@
       <p class="small">Opent een tweede Chrome met een eigen profiel (chrome-test) dat de regels gebruikt, met de huidige pagina. Sluit dat venster om te stoppen. Lukt openen niet, plak dan het commando in <span id="cmdWhere">Terminal</span> en druk op Enter. Het commando werkt ook zonder helper.</p>
     </section>
 
+    <section id="subCard" class="card">
+      <span class="label">Abonneren op een regellijst</span>
+      <div class="subForm">
+        <input id="subUrl" type="url" placeholder="https://voorbeeld.nl/regels.txt" autocomplete="off" spellcheck="false" aria-label="URL van de regellijst">
+        <select id="subInt" aria-label="Vernieuwen">
+          <option value="0">Handmatig</option>
+          <option value="60">Elk uur</option>
+          <option value="1440" selected>Elke dag</option>
+        </select>
+        <button id="subAdd" class="primary mini-primary">Abonneren</button>
+      </div>
+      <div id="subMsg" class="small" role="status"></div>
+      <div id="subList" class="subList"></div>
+      <p class="small" data-th>Hosts-formaat, optioneel met <code># group: Naam #kleur</code>. Alleen https, max 256 KB en 2000 regels. De regels zijn alleen-lezen en komen in een eigen groep, die eerst uit staat. Een lijst kan elk domein omleiden: abonneer alleen op lijsten die je vertrouwt. Chrome vraagt toegang tot alleen die ene website.</p>
+    </section>
+
+    <section id="syncCard" class="card">
+      <span class="label">Synchroniseren</span>
+      <label class="check"><input type="checkbox" id="syncOn"> Regels, groepen en instellingen synchroniseren tussen je Chrome-installaties</label>
+      <p id="syncState" class="small" role="status"></p>
+      <div class="row"><button id="syncNow" class="secondary">Nu synchroniseren</button></div>
+      <p class="small">Via de sync-opslag van Chrome (je Google-account, als Chrome-synchronisatie aan staat). Gaat mee: eigen regels, groepen, notities, abonnementen (alleen de URL) en instellingen. Gaat nooit mee: de helper-sleutel, Basic-auth-wachtwoorden en de aan/uit-schakelaar. Maximaal ongeveer 90 KB. Bij de eerste keer aanzetten worden beide kanten samengevoegd.</p>
+    </section>
+
     <section id="share" class="card">
       <span class="label">Regels delen (hosts-formaat)</span>
       <textarea id="hostsText" rows="5" spellcheck="false" placeholder="1.2.3.4 voorbeeld.nl www.voorbeeld.nl" aria-label="Regels in hosts-formaat"></textarea>

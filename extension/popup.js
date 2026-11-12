@@ -4,7 +4,7 @@ import {
 } from "./common.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
-  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
 } from "./model.js";
 import { initI18n, t } from "./i18n.js";
 import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
@@ -858,6 +858,110 @@ $("cCopy").onclick = () => {
   }
   copy(lines.join("\n"), $("cCopy"));
 };
+
+// --- Abonnementen ---
+function subError(code) {
+  const m = {
+    url: t("Ongeldige URL."), https: t("Alleen https-adressen (ook na een doorverwijzing)."), credentials: t("Geen gebruikersnaam of wachtwoord in de URL."),
+    host: t("Ongeldige hostnaam in de URL."), permission: t("Geen toegang tot deze website. Klik op Vernieuwen om toegang te geven."),
+    network: t("Kon de lijst niet ophalen (netwerk, certificaat of de server staat het niet toe)."), timeout: t("Time-out bij het ophalen."),
+    "too-big": t("De lijst is groter dan 256 KB."), "not-hosts": t("Dit is geen regellijst (HTML of JSON)."), "no-rules": t("Geen geldige regels in de lijst."),
+    duplicate: t("Je bent al geabonneerd op deze lijst."),
+  };
+  if (m[code]) return m[code];
+  if (/^http-\d+$/.test(code || "")) return t("De server gaf HTTP {s}.", { s: code.slice(5) });
+  return code || "";
+}
+const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "-");
+const INTERVALS = [[0, "Handmatig"], [60, "Elk uur"], [1440, "Elke dag"]];
+
+async function subRefresh(sub, msgEl) {
+  const origin = subOrigin(sub.url);
+  if (!(await chrome.permissions.contains({ origins: [origin] })) && !(await chrome.permissions.request({ origins: [origin] }))) {
+    msgEl.textContent = subError("permission");
+    return;
+  }
+  msgEl.textContent = t("Ophalen...");
+  const r = await chrome.runtime.sendMessage({ type: "ho-sub-refresh", id: sub.id });
+  msgEl.textContent = r?.error ? subError(r.error) : t("Bijgewerkt: {n} regels.", { n: r?.rules?.length ?? 0 });
+}
+
+// Bediening van één abonnement (in de lijst onder Meer en in de groepsinstellingen).
+function subControls(sub, state) {
+  const g = state.groups.find((x) => x.sub === sub.id);
+  const msg = h("div", { class: "small", role: "status" });
+  const status = sub.error ? h("span", { class: "bad-fg" }, subError(sub.error))
+    : t("{n} regels · bijgewerkt {time}", { n: sub.rules.length, time: fmtTime(sub.lastOk) }) + (sub.skipped ? " · " + t("{n} overgeslagen", { n: sub.skipped }) : "");
+  const sel = h("select", { "aria-label": t("Vernieuwen") });
+  for (const [v, l] of INTERVALS) sel.append(h("option", { value: String(v) }, t(l)));
+  sel.value = String(sub.interval);
+  sel.onchange = async () => {
+    const { subs = [] } = await chrome.storage.local.get("subs");
+    await chrome.storage.local.set({ subs: subs.map((x) => (x.id === sub.id ? { ...x, interval: Number(sel.value) } : x)) });
+  };
+  const ref = h("button", { type: "button", class: "secondary" }, t("Vernieuwen"));
+  ref.onclick = () => subRefresh(sub, msg);
+  const del = h("button", { type: "button", class: "secondary danger" }, t("Opzeggen"));
+  del.onclick = async () => {
+    const s = await load();
+    editGroup = null;
+    update({ subs: s.subs.filter((x) => x.id !== sub.id), groups: s.groups.filter((x) => x.sub !== sub.id) });
+    // Toegang tot die website is niet meer nodig (tenzij een ander abonnement dezelfde origin gebruikt).
+    const origin = subOrigin(sub.url);
+    if (!s.subs.some((x) => x.id !== sub.id && subOrigin(x.url) === origin)) chrome.permissions.remove({ origins: [origin] }).catch(() => {});
+  };
+  return h("div", { class: "subItem" },
+    h("div", { class: "t" }, h("span", { class: "gdot", style: `--gc:${g?.color || "#5c5f66"}` }), h("strong", {}, g ? gname(g, state) : new URL(sub.url).hostname)),
+    h("div", { class: "mono subUrl", title: sub.url }, sub.url),
+    h("div", { class: "small" }, status),
+    h("div", { class: "row wrap" }, sel, ref, del), msg);
+}
+groupEditorExtras.push((g, state) => {
+  if (!g.sub) return null;
+  const sub = state.subs.find((x) => x.id === g.sub);
+  return sub ? h("div", {}, h("h3", {}, t("Abonnement")), subControls(sub, state)) : null;
+});
+renderHooks.push((state) => {
+  if ($("viewMore").hidden) return;
+  $("subList").replaceChildren(...state.subs.map((s) => subControls(s, state)));
+});
+$("subAdd").onclick = async () => {
+  const url = $("subUrl").value.trim();
+  const p = subUrlProblem(url);
+  if (p) { $("subMsg").textContent = subError(p); return; }
+  // Toestemming voor alleen deze origin (moet vanuit de klik).
+  if (!(await chrome.permissions.request({ origins: [subOrigin(url)] }))) { $("subMsg").textContent = subError("permission"); return; }
+  $("subMsg").textContent = t("Ophalen...");
+  const r = await chrome.runtime.sendMessage({ type: "ho-sub-add", url, interval: Number($("subInt").value) });
+  if (r?.error) { $("subMsg").textContent = subError(r.error); return; }
+  $("subUrl").value = "";
+  $("subMsg").textContent = t("Geabonneerd: {n} regels in een eigen groep (staat nog uit, zet hem aan onder Regels).", { n: r.count }) + (r.skipped ? " " + t("{n} overgeslagen", { n: r.skipped }) + "." : "");
+  render(false);
+};
+
+// --- Sync ---
+async function renderSync() {
+  const { syncOn = false, syncStatus = {} } = await chrome.storage.local.get(["syncOn", "syncStatus"]);
+  $("syncOn").checked = syncOn;
+  $("syncNow").disabled = !syncOn;
+  const st = !syncOn ? t("Uit.") : syncStatus.error
+    ? t("Probleem: {e}", { e: syncStatus.error === "too-big" ? t("te veel gegevens voor sync ({kb} KB, max ~90 KB).", { kb: Math.round((syncStatus.bytes || 0) / 1024) }) : syncStatus.error === "quota" ? t("sync-quotum bereikt, probeer het later opnieuw.") : syncStatus.error })
+    : syncStatus.at ? t("Gesynchroniseerd {time} ({kb} KB).", { time: fmtTime(syncStatus.at), kb: Math.max(1, Math.round((syncStatus.bytes || 0) / 1024)) }) : t("Wachten op de eerste synchronisatie...");
+  $("syncState").textContent = st;
+}
+renderHooks.push(() => { if (!$("viewMore").hidden) renderSync(); });
+$("syncOn").onchange = async () => {
+  await chrome.storage.local.set({ syncOn: $("syncOn").checked });
+  setTimeout(renderSync, 1200);
+};
+$("syncNow").onclick = async () => {
+  $("syncState").textContent = t("Bezig...");
+  await chrome.runtime.sendMessage({ type: "ho-sync-now" });
+  setTimeout(() => render(false), 300);
+};
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && (changes.syncStatus || changes.subs)) render(false);
+});
 
 // --- Taal ---
 $("langSel").value = langPref;
