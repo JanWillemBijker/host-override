@@ -74,17 +74,20 @@
     </section>
 
     <input id="filter" type="search" class="filter" placeholder="Zoek in regels..." aria-label="Zoek in regels" hidden>
-    <div id="rules" class="rules"></div>
+    <div id="groups" class="groups"></div>
     <div id="empty" class="empty" hidden>Nog geen regels. Voeg hieronder een domein en IP toe.</div>
+    <div class="gtools"><button id="newGroup" class="link" type="button">+ Nieuwe groep</button></div>
 
     <div id="bulk" class="bulk" hidden>
-      <input type="text" id="bulkIp" placeholder="Alle regels naar IP..." spellcheck="false" aria-label="IP voor alle regels">
+      <input type="text" id="bulkIp" placeholder="Alle eigen regels naar IP..." spellcheck="false" aria-label="IP voor alle eigen regels">
       <button id="bulkBtn" class="secondary">Toepassen</button>
     </div>
 
     <form id="add">
       <input id="host" placeholder="example.nl  of  *.example.nl" autocomplete="off" spellcheck="false" required aria-label="Domein">
-      <input id="ip" placeholder="1.2.3.4" autocomplete="off" spellcheck="false" required aria-label="IP-adres">
+      <input id="ip" placeholder="1.2.3.4 of server.nl" autocomplete="off" spellcheck="false" required aria-label="IP-adres of hostnaam">
+      <input id="note" class="note" placeholder="Notitie (optioneel)" maxlength="120" autocomplete="off" aria-label="Notitie">
+      <select id="addGroup" aria-label="Groep" hidden></select>
       <button class="primary">Toevoegen</button>
     </form>
     <div id="err" class="err" role="alert"></div>
@@ -124,6 +127,7 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" id="autoReload"> Tab automatisch herladen na een wijziging</label>
+      <label class="check"><input type="checkbox" id="exclusive"> Maar één groep tegelijk actief</label>
       <label class="check"><input type="checkbox" id="sideDefault"> Open altijd als zijpaneel</label>
       <p class="small" data-th>Sneltoets: Alt+Shift+H zet alles aan of uit. <a href="welcome.html" target="_blank">Installatie-uitleg</a></p>
     </section>
@@ -167,7 +171,8 @@
         <label class="field">Tekst
           <input id="indText" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="TEST · {ip}">
         </label>
-        <p class="small">Gebruik {ip}, {host} en {source} (Host Override, hosts-bestand of afwijkende DNS).</p>
+        <p class="small">Gebruik {ip}, {host}, {group} (naam van de groep) en {source} (Host Override, hosts-bestand of afwijkende DNS).</p>
+        <label class="check"><input type="checkbox" id="indGroupColor"> Kleur van de groep gebruiken bij een Host Override-regel</label>
         <label class="check"><input type="checkbox" id="indShowIp"> Toon het IP</label>
         <label class="check"><input type="checkbox" id="indHideHover"> Bijna onzichtbaar als de muis erover gaat</label>
         <label class="check"><input type="checkbox" id="indDismiss"> Klik om te verbergen (voor deze tab)</label>
@@ -210,7 +215,8 @@
         <button id="copyHosts" class="secondary">Kopieer</button>
         <button id="applyHosts" class="primary">Toevoegen uit tekst</button>
       </div>
-      <p class="small">Plak regels van een collega en kies "Toevoegen uit tekst". Werkt ook met echte hosts-regels.</p>
+      <div id="shareMsg" class="small" role="status"></div>
+      <p class="small" data-th>Plak regels van een collega en kies "Toevoegen uit tekst". Werkt ook met echte hosts-regels. Groepen staan erin als <code># group: Naam #kleur</code>, notities als <code># notitie</code> achter de regel.</p>
     </section>
     <div id="moreErr" class="err" role="alert"></div>
   </div>

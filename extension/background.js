@@ -1,4 +1,5 @@
-import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected, getSecret, helperStatus, helperFetch } from "./common.js";
+import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected, getSecret, helperStatus, helperFetch, loadState, STATE_KEYS } from "./common.js";
+import { groupOf, groupName, activeGroups, normState, isTargetHost, isIp } from "./model.js";
 import { classify, triggers, dohLookup, hostsLookup } from "./detect.js";
 import { normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
 import { t, setLang, resolveLang } from "./i18n.js";
@@ -9,9 +10,15 @@ const PROXY = `127.0.0.1:${PORT}`;
 // foutmelding dan stilletjes een verkeerde server of je verkeer bij een vreemd programma.
 const BLACKHOLE = "127.0.0.1:1";
 
-async function getState() {
-  const { enabled = false, rules = [] } = await chrome.storage.local.get(["enabled", "rules"]);
-  return { enabled, rules };
+const getState = loadState;
+
+// Migratie vanaf 1.7: losse regels krijgen een standaardgroep. Eenmalig terugschrijven zodat popup,
+// sync en export dezelfde vorm zien.
+async function migrate() {
+  const raw = await chrome.storage.local.get(STATE_KEYS);
+  if (Array.isArray(raw.groups) && raw.rules?.every((r) => r && typeof r.group === "string")) return;
+  const s = normState(raw);
+  await chrome.storage.local.set({ rules: s.rules, groups: s.groups });
 }
 
 // `rules` is al gevalideerd (activeRules -> validRules): alleen [a-z0-9.-] en "*." komen in het script,
@@ -58,7 +65,10 @@ async function apply() {
     scope: "regular",
   });
   const ok = info.verified && await pushToProxy(rules);
-  await chrome.action.setBadgeBackgroundColor({ color: ok ? "#c2410c" : "#c92a2a" });
+  // Eén actieve groep: badge in de kleur van die groep. Meerdere: de vaste accentkleur.
+  const groups = activeGroups(await getState());
+  const color = groups.length === 1 ? groups[0].color : "#c2410c";
+  await chrome.action.setBadgeBackgroundColor({ color: ok ? color : "#c92a2a" });
   await chrome.action.setBadgeText({ text: ok ? String(rules.length) : "!" });
   return { info, ok, active: rules.length };
 }
@@ -90,7 +100,7 @@ async function applyPanel() {
 applyPanel();
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.enabled || changes.rules)) apply();
+  if (area === "local" && (changes.enabled || changes.rules || changes.groups || changes.subs)) apply();
   if (area === "local" && changes.sideDefault) applyPanel();
   if (area === "local" && (changes.indicator || changes.pageBadge || changes.lang)) repaintAll();
 });
@@ -119,15 +129,30 @@ async function hostsFor(host) {
   return v;
 }
 
+// Doel als hostnaam: de helper zoekt het IP op (systeem-resolver, ~60 s cache). Hier kort onthouden.
+const resolveMemo = new Map();
+async function resolvedIp(name) {
+  const m = resolveMemo.get(name);
+  if (m && m.until > Date.now()) return m.v;
+  let v = null;
+  try {
+    const res = await helperFetch("/__resolve", { body: { names: [name] } });
+    if (res.ok) { const ip = (await res.json())?.results?.[name]?.ips?.[0]; if (isIp(ip)) v = ip; }
+  } catch { /* helper niet beschikbaar */ }
+  resolveMemo.set(name, { v, until: Date.now() + 30000 });
+  if (resolveMemo.size > 100) resolveMemo.delete(resolveMemo.keys().next().value);
+  return v;
+}
+
 function sourceName(source) {
   return { rule: "Host Override", hosts: t("hosts-bestand"), differs: t("afwijkende DNS") }[source] || "";
 }
 
-async function setTabBadge(tabId, source) {
+async function setTabBadge(tabId, source, color) {
   try {
     const b = BADGE[source];
     if (b) {
-      await chrome.action.setBadgeBackgroundColor({ color: b[1], tabId });
+      await chrome.action.setBadgeBackgroundColor({ color: color || b[1], tabId });
       await chrome.action.setBadgeText({ text: b[0], tabId });
     } else {
       // null: terug naar de algemene badge (aantal regels). Oudere Chrome-versies kennen null niet: dan leeg.
@@ -147,11 +172,13 @@ async function paintIndicator(tabId, rec) {
   if (show) {
     const r = rec.result;
     const source = sourceName(r.source);
+    const color = r.source === "rule" && ind.groupColor && rec.groupColor ? rec.groupColor : ind.color;
+    const ip = rec.resolved ? `${r.ip} (${rec.resolved})` : r.ip || "";
     cfg = {
       style: ind.style, corner: ind.corner, edge: ind.edge, size: ind.size, opacity: ind.opacity,
-      hideHover: ind.hideHover, dismiss: ind.dismiss, color: ind.color, fg: textColor(ind.color),
-      text: renderLabel(ind.text, { ip: r.ip || "", host: rec.host, source }, ind.showIp),
-      title: (r.source === "rule" ? t("Host Override: deze pagina komt van je testserver ({ip}).", { ip: r.ip })
+      hideHover: ind.hideHover, dismiss: ind.dismiss, color, fg: textColor(color),
+      text: renderLabel(ind.text, { ip: rec.resolved || r.ip || "", host: rec.host, source, group: rec.group || "" }, ind.showIp),
+      title: (r.source === "rule" ? (rec.group ? `${rec.group} · ` : "") + t("Host Override: deze pagina komt van je testserver ({ip}).", { ip })
         : r.source === "hosts" ? t("Host Override: {host} staat in je hosts-bestand ({ip}).", { host: rec.host, ip: r.ip })
         : t("Host Override: het IP van deze pagina ({ip}) wijkt af van publieke DNS.", { ip: r.ip || "?" })) +
         (ind.dismiss ? " " + t("Klik om te verbergen voor deze tab.") : ""),
@@ -184,8 +211,14 @@ async function evaluate(tabId, host, ip) {
   }
   const result = classify({ ip, rule, hosts, doh });
   const rec = { host, ip: ip || null, result, at: Date.now() };
+  if (rule) {
+    const g = groupOf(state, rule.group);
+    rec.group = groupName(g, state, t);
+    rec.groupColor = g?.color || null;
+    if (isTargetHost(rule.ip)) rec.resolved = await resolvedIp(rule.ip);
+  }
   await chrome.storage.session.set({ [`tab:${tabId}`]: rec });
-  await setTabBadge(tabId, result.source === "differs" && result.near ? null : result.source);
+  await setTabBadge(tabId, result.source === "differs" && result.near ? null : result.source, rec.groupColor);
   await paintIndicator(tabId, rec);
 }
 
@@ -204,7 +237,7 @@ async function repaintAll() {
   for (const [k, rec] of Object.entries(all)) {
     if (!k.startsWith("tab:")) continue;
     const tabId = Number(k.slice(4));
-    await setTabBadge(tabId, rec.result?.source === "differs" && rec.result.near ? null : rec.result?.source);
+    await setTabBadge(tabId, rec.result?.source === "differs" && rec.result.near ? null : rec.result?.source, rec.groupColor);
     await paintIndicator(tabId, rec);
   }
 }
@@ -225,9 +258,10 @@ chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove([`tab:${
 function startAlarm() {
   chrome.alarms.create("resync", { periodInMinutes: 1 });
 }
-chrome.runtime.onStartup.addListener(() => { startAlarm(); apply(); });
+chrome.runtime.onStartup.addListener(async () => { startAlarm(); await migrate(); apply(); });
 chrome.runtime.onInstalled.addListener(async (details) => {
   await getSecret(); // geheim voor de helper alvast aanmaken
+  await migrate();
   startAlarm();
   apply();
   if (details.reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });

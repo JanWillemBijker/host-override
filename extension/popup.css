@@ -196,3 +196,48 @@ body.side [role=tabpanel] { flex: none; }
 .hrow .names { overflow-wrap: anywhere; }
 .hrow .k { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; margin-left: 4px; }
 #hostsMsg:not(:empty) { margin-top: 6px; color: var(--fg); }
+
+/* Groepen (omgevingen) */
+.groups { display: flex; flex-direction: column; gap: 8px; }
+.group { border: 1px solid var(--line); border-left: 4px solid var(--gc, var(--accent)); border-radius: 8px; background: var(--bg); }
+.group.goff { border-left-style: dashed; }
+.group.goff .gname, .group.goff .grules { opacity: .6; }
+.ghead { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 2px; }
+.gtoggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 4px 6px; color: var(--fg); text-align: left; border-radius: 6px; flex-wrap: wrap; }
+.gtoggle:hover { background: var(--field); }
+.gchev { color: var(--muted); font-size: 11px; transition: transform .15s; }
+.gtoggle[aria-expanded=true] .gchev { transform: rotate(90deg); }
+.gdot { width: 10px; height: 10px; border-radius: 50%; background: var(--gc); flex: none; }
+.gname { font-weight: 600; overflow-wrap: anywhere; }
+.gcount { font-size: 11px; color: var(--muted); background: var(--field); border-radius: 9px; padding: 0 6px; }
+.gtag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.switch.sm { width: 30px; height: 18px; flex: none; }
+.switch.sm .slider::before { width: 14px; height: 14px; }
+.switch.sm input:checked + .slider { background: var(--gc, var(--accent)); }
+.switch.sm input:checked + .slider::before { transform: translateX(12px); }
+.grules { padding: 0 8px 2px 10px; }
+.grules .rule:last-child { border-bottom: 0; }
+.gempty { font-size: 11.5px; color: var(--muted); margin: 2px 0 8px; }
+.gtools { display: flex; justify-content: flex-end; margin: 6px 0 0; }
+.geditor { margin: 0 8px 8px 10px; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.geditor .field input[type=text], .geditor .field input[type=password] { width: 100%; margin-top: 3px; }
+.geditor h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 10px 0 2px; font-weight: 600; }
+.danger { color: var(--bad-fg); }
+.danger:hover { border-color: var(--bad); }
+.rule { grid-template-columns: auto 1fr 118px auto auto; gap: 6px; }
+.rule .more { font-size: 16px; }
+.rule.ro .rotarget { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+.hostcell { display: flex; flex-direction: column; min-width: 0; }
+.rnote { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rres { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); }
+.rres.bad { color: var(--bad-fg); }
+.ruleEdit { display: grid; grid-template-columns: 1fr 110px auto; gap: 6px; padding: 0 0 8px 24px; border-bottom: 1px solid var(--line); }
+.ruleEdit select { margin: 0; }
+form .note { grid-column: 1 / -1; }
+form #addGroup:not([hidden]) { grid-column: 1 / -1; margin: 0; }
+form:has(#addGroup:not([hidden])) .note { grid-column: 1; }
+form:has(#addGroup:not([hidden])) #addGroup { grid-column: 2; }
+.rule { grid-template-columns: auto minmax(0, 1fr) 112px 22px 22px; gap: 4px; }
+.rule .del { width: 22px; }
+.rule .hostcell .host { overflow-wrap: anywhere; }
+.geditor .field input[type=text] { font: inherit; }

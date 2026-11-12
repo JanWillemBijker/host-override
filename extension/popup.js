@@ -1,7 +1,11 @@
 import {
   activeRules, matchRule, isHost, isIp, formatHosts, parseHosts,
-  OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch,
+  OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch, STATE_KEYS,
 } from "./common.js";
+import {
+  normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX,
+} from "./model.js";
 import { initI18n, t } from "./i18n.js";
 import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
 import { COLORS, INDICATOR_DEFAULTS, normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
@@ -22,10 +26,13 @@ try {
 } catch { /* oudere Chrome */ }
 document.body.classList.toggle("side", sideMode);
 
+// Regels + groepen (genormaliseerd, ook voor een oude opslag zonder groepen) plus popup-instellingen.
 async function load() {
-  const { enabled = false, rules = [], autoReload = true, pageBadge = true, lastIp = "", sideDefault = false } =
-    await chrome.storage.local.get(["enabled", "rules", "autoReload", "pageBadge", "lastIp", "sideDefault"]);
-  return { enabled, rules, autoReload, pageBadge, lastIp, sideDefault };
+  const raw = await chrome.storage.local.get([...STATE_KEYS, "autoReload", "pageBadge", "lastIp", "sideDefault", "collapsed", "lastGroup"]);
+  return {
+    ...normState(raw), autoReload: raw.autoReload !== false, pageBadge: raw.pageBadge !== false, lastIp: raw.lastIp || "",
+    sideDefault: raw.sideDefault === true, collapsed: Array.isArray(raw.collapsed) ? raw.collapsed : [], lastGroup: raw.lastGroup || "",
+  };
 }
 
 // Elke wijziging loopt hierlangs: bewaren, proxy bijwerken, en de huidige tab herladen als die erdoor verandert.
@@ -148,6 +155,8 @@ async function renderSite(state) {
   const granted = await chrome.permissions.contains(ALL_SITES);
 
   const pill = $("siteKind");
+  const resIp = rule && isTargetHost(rule.ip) ? resolved.get(rule.ip)?.ips?.[0] : null;
+  const ruleGroup = rule ? groupOf(state, rule.group) : null;
   const P = {
     rule: [t("Override naar {ip}", { ip: r.ip }), "override"],
     hosts: [t("Hosts-bestand: {ip}", { ip: r.ip }), "hosts"],
@@ -157,9 +166,10 @@ async function renderSite(state) {
   }[r.source];
   pill.textContent = P[0];
   pill.className = "pill " + P[1];
+  pill.style.background = r.source === "rule" && ruleGroup ? ruleGroup.color : "";
 
   // Verbonden: het IP waar Chrome mee praat. Live IP: wat publieke DNS zegt.
-  $("connIp").textContent = rule ? t("{ip} (via de helper)", { ip: rule.ip }) : seen || (granted ? t("Ververs de pagina") : "-");
+  $("connIp").textContent = rule ? t("{ip} (via de helper)", { ip: resIp ? `${rule.ip} → ${resIp}` : rule.ip }) : seen || (granted ? t("Ververs de pagina") : "-");
   const pub = doh?.status === "ok" ? doh.ips : null;
   const live = pub ? pub[0] : store[liveKey] || null;
   $("liveIp").textContent = pub ? (pub.length > 1 ? `${pub[0]} +${pub.length - 1}` : pub[0]) : doh ? t("niet in publieke DNS") : live || "-";
@@ -171,7 +181,10 @@ async function renderSite(state) {
   // Uitleg: zeker (regel, hosts-bestand) of een vermoeden (wijkt af van publieke DNS).
   const note = $("srcNote");
   let text = "";
-  if (r.source === "rule") text = t("Bron: Host Override-regel. Alleen dit Chrome-profiel; incognito toont de live site.");
+  if (r.source === "rule") {
+    text = t("Bron: Host Override-regel in groep \"{g}\". Alleen dit Chrome-profiel; incognito toont de live site.", { g: gname(ruleGroup, state) });
+    if (rule.note) text += " " + t("Notitie: {n}", { n: rule.note });
+  }
   else if (r.source === "hosts") {
     text = t("Staat in je hosts-bestand: {ip}. Deze computer gebruikt niet het live IP, ook niet in incognito of andere browsers.", { ip: r.ip });
     if (r.mismatch && r.connected) text += " " + t("Chrome is wel verbonden met {ip} (proxy of VPN?).", { ip: r.connected });
@@ -185,9 +198,10 @@ async function renderSite(state) {
   note.hidden = !text;
   note.textContent = text;
   note.className = "srcNote " + r.source;
+  note.style.borderLeftColor = r.source === "rule" && ruleGroup ? ruleGroup.color : "";
 
   $("permBtn").hidden = granted;
-  $("useBtn").hidden = !!rule || !!state.rules.find((x) => x.host === tab.host);
+  $("useBtn").hidden = !!rule || !!allRules(state).find((x) => x.host === tab.host);
   $("useBtn").onclick = () => {
     $("host").value = tab.host;
     $("ip").value = state.lastIp || "";
@@ -227,103 +241,305 @@ $("incoBtn").onclick = async () => {
   }
 };
 
-// --- Regels ---
+// --- Regels en groepen ---
+// Veilige DOM-bouwer: regels, notities en groepsnamen komen alleen als tekst in de popup.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el[k] = v;
+    else if (k === "style") el.style.cssText = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return el;
+}
+const gname = (g, st) => groupName(g, st, t);
+let editGroup = null; // id van de groep waarvan de instellingen open staan
+let editRule = null; // host van de regel waarvan notitie/groep open staat
+let resolved = new Map(); // doel-hostnaam -> { ips, error, until }
+
+function errMsg(text) { $("err").textContent = text || ""; }
+
+async function mutateRules(fn, extra = {}) {
+  const s = await load();
+  update({ rules: fn(s.rules.map((r) => ({ ...r }))), ...extra });
+}
+async function mutateGroups(fn, extra = {}) {
+  const s = await load();
+  update({ groups: fn(s.groups.map((g) => ({ ...g })), s), ...extra });
+}
+
+function ruleRow(r, state) {
+  const own = !r.readOnly;
+  const row = h("div", { class: "rule" + (r.enabled === false ? " off" : "") + (own ? "" : " ro") });
+  const cb = h("input", { type: "checkbox", title: t("Regel aan of uit"), "aria-label": t("Regel aan of uit") + ": " + r.host });
+  cb.checked = r.enabled !== false;
+  cb.disabled = !own;
+  cb.onchange = () => mutateRules((rules) => rules.map((x) => (x.host === r.host ? { ...x, enabled: cb.checked } : x)));
+
+  const cell = h("div", { class: "hostcell" }, h("span", { class: "host" }, r.host));
+  if (r.note) cell.append(h("span", { class: "rnote", title: r.note }, r.note));
+  if (isTargetHost(r.ip)) {
+    const res = resolved.get(r.ip);
+    cell.append(h("span", { class: "rres" + (res?.error ? " bad" : "") },
+      res ? (res.ips?.length ? "→ " + res.ips.slice(0, 2).join(", ") : t("niet gevonden ({e})", { e: res.error || "?" })) : t("IP opzoeken...")));
+  }
+
+  let target;
+  if (own) {
+    target = h("input", { type: "text", spellcheck: "false", title: t("IP of hostnaam aanpassen"), "aria-label": t("IP of hostnaam aanpassen") + ": " + r.host });
+    target.value = r.ip;
+    target.onchange = () => {
+      const v = target.value.trim().toLowerCase();
+      if (!isTarget(v)) { target.value = r.ip; errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
+      errMsg("");
+      mutateRules((rules) => rules.map((x) => (x.host === r.host ? { ...x, ip: isIp(target.value.trim()) ? target.value.trim() : v } : x)));
+    };
+  } else target = h("code", { class: "rotarget", title: t("Uit een abonnement: alleen lezen") }, r.ip);
+
+  const more = h("button", { class: "del more", title: t("Notitie en groep"), "aria-label": t("Notitie en groep") + ": " + r.host,
+    "aria-expanded": String(editRule === r.host), hidden: !own }, "⋯");
+  more.onclick = () => { editRule = editRule === r.host ? null : r.host; render(false); };
+  const del = h("button", { class: "del", title: t("Verwijderen"), "aria-label": t("Verwijderen") + ": " + r.host, hidden: !own }, "×");
+  del.onclick = () => mutateRules((rules) => rules.filter((x) => x.host !== r.host));
+  row.append(cb, cell, target, more, del);
+  if (!own || editRule !== r.host) return [row];
+
+  // Notitie en groep (verplaatsen) onder de regel.
+  const note = h("input", { type: "text", maxlength: String(NOTE_MAX), placeholder: t("Notitie (optioneel)"), "aria-label": t("Notitie") });
+  note.value = r.note || "";
+  const sel = groupSelect(state, r.group, t("Groep"));
+  const save = h("button", { class: "secondary", type: "button" }, t("Opslaan"));
+  const done = () => {
+    editRule = null;
+    mutateRules((rules) => rules.map((x) => {
+      if (x.host !== r.host) return x;
+      const n = { ...x, group: sel.value };
+      const v = cleanText(note.value, NOTE_MAX);
+      if (v) n.note = v; else delete n.note;
+      return n;
+    }));
+  };
+  save.onclick = done;
+  note.onkeydown = (e) => { if (e.key === "Enter") done(); if (e.key === "Escape") { editRule = null; render(false); } };
+  const ed = h("div", { class: "ruleEdit" }, note, sel, save);
+  setTimeout(() => note.focus(), 0);
+  return [row, ed];
+}
+
+function groupSelect(state, value, label) {
+  const sel = h("select", { "aria-label": label });
+  for (const g of state.groups.filter((x) => !x.sub)) sel.append(h("option", { value: g.id }, gname(g, state)));
+  sel.value = value && state.groups.some((g) => g.id === value && !g.sub) ? value : DEFAULT_GROUP;
+  return sel;
+}
+
+function groupEditor(g, state) {
+  const box = h("div", { class: "geditor", id: "ged-" + g.id });
+  const name = h("input", { type: "text", maxlength: String(NAME_MAX), placeholder: gname(g, state), "aria-label": t("Naam van de groep") });
+  name.value = g.name;
+  name.onchange = () => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, name: cleanText(name.value, NAME_MAX) } : x)));
+  const sw = h("div", { class: "swatches", role: "radiogroup", "aria-label": t("Kleur van de groep") });
+  for (const c of GROUP_COLORS) {
+    const b = h("button", { type: "button", class: "swatch", role: "radio", "aria-checked": String(c === g.color), "aria-label": c, title: c, style: `background:${c}` });
+    b.onclick = () => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, color: c } : x)));
+    sw.append(b);
+  }
+  const custom = h("input", { type: "color", title: t("Eigen kleur"), "aria-label": t("Eigen kleur") });
+  custom.value = g.color;
+  custom.onchange = () => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, color: custom.value.toLowerCase() } : x)));
+  sw.append(custom);
+  box.append(h("label", { class: "field" }, t("Naam"), name), h("div", { class: "field" }, h("span", {}, t("Kleur")), sw));
+  for (const extra of groupEditorExtras) { const n = extra(g, state); if (n) box.append(n); }
+  const row = h("div", { class: "row wrap" });
+  if (!g.sub && g.id !== DEFAULT_GROUP) {
+    const del = h("button", { type: "button", class: "secondary danger" }, t("Groep verwijderen"));
+    del.onclick = () => {
+      editGroup = null;
+      mutateGroups((gs) => gs.filter((x) => x.id !== g.id), { rules: state.rules.map((r) => (r.group === g.id ? { ...r, group: DEFAULT_GROUP } : r)) });
+    };
+    row.append(del);
+    row.append(h("span", { class: "small" }, t("De regels gaan naar \"{g}\".", { g: gname(state.groups[0], state) })));
+  }
+  if (row.childElementCount) box.append(row);
+  return box;
+}
+// Uitbreidingen van de groepsinstellingen (headers, abonnement) haken hier in.
+const groupEditorExtras = [];
+
+function renderGroups(state, q) {
+  const box = $("groups");
+  box.textContent = "";
+  const all = allRules(state);
+  const collapsed = new Set(state.collapsed);
+  for (const g of state.groups) {
+    const rules = all.filter((r) => r.group === g.id);
+    const shown = q ? rules.filter((r) => r.host.includes(q) || r.ip.includes(q) || (r.note || "").toLowerCase().includes(q)) : rules;
+    if (q && !shown.length) continue;
+    const open = !!q || !collapsed.has(g.id);
+    const on = g.enabled;
+    const sec = h("section", { class: "group" + (on ? "" : " goff"), style: `--gc:${g.color}` });
+    const listId = "gl-" + g.id;
+    const tags = [];
+    if (g.sub) tags.push(h("span", { class: "gtag" }, t("abonnement")));
+    if (g.noCache) tags.push(h("span", { class: "gtag" }, t("geen cache")));
+    if (g.auth?.user) tags.push(h("span", { class: "gtag" }, t("Basic-auth")));
+    if (g.headers?.length) tags.push(h("span", { class: "gtag" }, t("{n} header(s)", { n: g.headers.length })));
+    const toggle = h("button", { class: "gtoggle", "aria-expanded": String(open), "aria-controls": listId, title: open ? t("Inklappen") : t("Uitklappen") },
+      h("span", { class: "gchev", "aria-hidden": "true" }, "▸"), h("span", { class: "gdot", "aria-hidden": "true" }),
+      h("span", { class: "gname" }, gname(g, state)), h("span", { class: "gcount" }, String(rules.length)), tags);
+    toggle.onclick = async () => {
+      const set = new Set((await load()).collapsed);
+      set.has(g.id) ? set.delete(g.id) : set.add(g.id);
+      await chrome.storage.local.set({ collapsed: [...set] });
+      render(false);
+    };
+    const sw = h("label", { class: "switch sm", title: t("Groep aan of uit") }, h("input", { type: "checkbox", "aria-label": t("Groep {g} aan of uit", { g: gname(g, state) }) }), h("span", { class: "slider" }));
+    const swIn = sw.querySelector("input");
+    swIn.checked = on;
+    swIn.onchange = async () => {
+      const s = await load();
+      const next = setGroupEnabled(s, g.id, swIn.checked);
+      update(swIn.checked ? { groups: next.groups, enabled: true } : { groups: next.groups });
+    };
+    const gear = h("button", { class: "icon", title: t("Groep instellen"), "aria-label": t("Groep {g} instellen", { g: gname(g, state) }), "aria-expanded": String(editGroup === g.id) });
+    gear.append(gearIcon());
+    gear.onclick = () => { editGroup = editGroup === g.id ? null : g.id; render(false); };
+    sec.append(h("div", { class: "ghead" }, toggle, sw, gear));
+    if (editGroup === g.id) sec.append(groupEditor(g, state));
+    const list = h("div", { class: "grules", id: listId, hidden: !open });
+    for (const r of shown) list.append(...ruleRow(r, state));
+    if (!rules.length) list.append(h("p", { class: "gempty" }, g.sub ? t("Deze lijst bevat (nog) geen regels.") : t("Leeg. Kies deze groep bij Toevoegen of verplaats een regel hierheen (⋯).")));
+    sec.append(list);
+    box.append(sec);
+  }
+  resolveTargets(all);
+}
+
+function gearIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "14"); svg.setAttribute("height", "14"); svg.setAttribute("viewBox", "0 0 16 16"); svg.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("fill", "currentColor");
+  p.setAttribute("d", "M2 4h7.3a2 2 0 0 1 3.4 0H14v1.5h-1.3a2 2 0 0 1-3.4 0H2zm0 6.5h1.3a2 2 0 0 1 3.4 0H14V12H6.7a2 2 0 0 1-3.4 0H2z");
+  svg.append(p);
+  return svg;
+}
+
+// Doelen die een hostnaam zijn: de helper zoekt het IP op (systeem-resolver), zodat je ziet waar het heen gaat.
+let resolving = false;
+async function resolveTargets(all) {
+  const names = [...new Set(all.map((r) => r.ip).filter(isTargetHost))].filter((n) => !(resolved.get(n)?.until > Date.now())).slice(0, 50);
+  if (!names.length || resolving) return;
+  resolving = true;
+  try {
+    const res = await helperFetch("/__resolve", { body: { names } });
+    const j = await res.json().catch(() => ({}));
+    for (const n of names) {
+      const r = j.results?.[n];
+      resolved.set(n, res.ok && r ? { ips: (r.ips || []).filter(isIp), error: r.error || null, until: Date.now() + 30000 }
+        : { ips: [], error: res.status === 404 || res.status === 400 ? t("helper bijwerken") : j.error || `status ${res.status}`, until: Date.now() + 15000 });
+    }
+  } catch (e) {
+    for (const n of names) resolved.set(n, { ips: [], error: helperErr(e.message), until: Date.now() + 15000 });
+  } finally { resolving = false; }
+  render(false);
+}
+function helperErr(code) {
+  return { "helper-missing": t("helper draait niet"), "helper-outdated": t("helper-update nodig"), "helper-setup": t("helper moet opnieuw worden ingesteld"), setup: t("helper moet opnieuw worden ingesteld") }[code] || code;
+}
+
+function fillAddGroup(state) {
+  const sel = $("addGroup");
+  const keep = sel.value || state.lastGroup;
+  sel.replaceChildren(...groupSelect(state, keep, "").children);
+  sel.value = state.groups.some((g) => g.id === keep && !g.sub) ? keep : DEFAULT_GROUP;
+  sel.hidden = state.groups.filter((g) => !g.sub).length < 2;
+}
+
 async function render(refresh = true) {
   const state = await load();
   $("master").checked = state.enabled;
   $("autoReload").checked = state.autoReload;
   $("sideDefault").checked = state.sideDefault;
-  $("empty").hidden = state.rules.length > 0;
+  $("exclusive").checked = state.exclusiveGroups;
+  const total = allRules(state).length;
+  $("empty").hidden = total > 0;
   $("bulk").hidden = state.rules.length < 2;
-  $("filter").hidden = state.rules.length < 7;
+  $("filter").hidden = total < 7;
   const q = $("filter").hidden ? "" : $("filter").value.trim().toLowerCase();
-  const list = $("rules");
-  list.textContent = "";
-  state.rules.forEach((r, i) => {
-    if (q && !(r.host.toLowerCase().includes(q) || r.ip.includes(q))) return;
-    const row = document.createElement("div");
-    row.className = "rule" + (r.enabled === false ? " off" : "");
-
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = r.enabled !== false;
-    cb.title = t("Regel aan of uit");
-    cb.setAttribute("aria-label", t("Regel aan of uit"));
-    cb.onchange = async () => {
-      const s = await load();
-      s.rules[i].enabled = cb.checked;
-      update({ rules: s.rules });
-    };
-
-    const host = document.createElement("span");
-    host.className = "host";
-    host.textContent = r.host;
-
-    const ip = document.createElement("input");
-    ip.type = "text";
-    ip.value = r.ip;
-    ip.spellcheck = false;
-    ip.title = t("IP aanpassen");
-    ip.setAttribute("aria-label", t("IP aanpassen"));
-    ip.onchange = async () => {
-      const v = ip.value.trim();
-      if (!isIp(v)) { ip.value = r.ip; $("err").textContent = t("Ongeldig IP-adres."); return; }
-      $("err").textContent = "";
-      const s = await load();
-      s.rules[i].ip = v;
-      update({ rules: s.rules });
-    };
-
-    const del = document.createElement("button");
-    del.className = "del";
-    del.textContent = "×";
-    del.title = t("Verwijderen");
-    del.setAttribute("aria-label", t("Verwijderen"));
-    del.onclick = async () => {
-      const s = await load();
-      s.rules.splice(i, 1);
-      update({ rules: s.rules });
-    };
-
-    row.append(cb, host, ip, del);
-    list.append(row);
-  });
+  renderGroups(state, q);
+  fillAddGroup(state);
   await renderSite(state);
   if (!$("viewMore").hidden) {
     renderIndicator();
-    renderCommand(state.rules);
-    if (document.activeElement !== $("hostsText")) $("hostsText").value = formatHosts(state.rules);
+    renderCommand(activeRules({ ...state, enabled: true }));
+    if (document.activeElement !== $("hostsText")) $("hostsText").value = formatHosts(state.rules, state.groups.filter((g) => !g.sub));
   }
+  for (const fn of renderHooks) fn(state);
   if (refresh) refreshStatus(state);
 }
+const renderHooks = [];
 
 $("master").onchange = () => update({ enabled: $("master").checked });
 $("filter").oninput = () => render(false);
 $("autoReload").onchange = () => chrome.storage.local.set({ autoReload: $("autoReload").checked });
 $("sideDefault").onchange = () => chrome.storage.local.set({ sideDefault: $("sideDefault").checked });
+$("exclusive").onchange = async () => {
+  const on = $("exclusive").checked;
+  const s = await load();
+  // Aanzetten met meerdere actieve groepen: alleen de eerste actieve blijft aan.
+  let groups = s.groups;
+  if (on) { const first = groups.find((g) => g.enabled); groups = groups.map((g) => ({ ...g, enabled: g === first })); }
+  update({ exclusiveGroups: on, groups });
+};
+
+$("newGroup").onclick = async () => {
+  const s = await load();
+  const id = newGroupId(s.groups);
+  const color = GROUP_COLORS[s.groups.length % GROUP_COLORS.length];
+  const name = t("Groep {n}", { n: s.groups.filter((g) => !g.sub).length + 1 });
+  editGroup = id;
+  $("addGroup").value = id;
+  await chrome.storage.local.set({ lastGroup: id });
+  update({ groups: [...s.groups, { id, name, color, enabled: !s.exclusiveGroups, noCache: false, auth: null, headers: [] }] });
+  setTimeout(() => document.querySelector(`#ged-${id} input`)?.select(), 50);
+};
+$("addGroup").onchange = () => chrome.storage.local.set({ lastGroup: $("addGroup").value });
 
 $("add").onsubmit = async (e) => {
   e.preventDefault();
   const host = $("host").value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:?#].*$/, "");
-  const ip = $("ip").value.trim();
-  if (!isHost(host)) { $("err").textContent = t("Ongeldig domein."); return; }
-  if (!isIp(ip)) { $("err").textContent = t("Ongeldig IP-adres."); return; }
-  $("err").textContent = "";
-  const { rules } = await load();
-  const next = rules.filter((r) => r.host !== host);
-  next.push({ host, ip, enabled: true });
-  $("host").value = "";
-  $("ip").value = "";
-  update({ rules: next, enabled: true, lastIp: ip });
+  const raw = $("ip").value.trim();
+  const ip = isIp(raw) ? raw : raw.toLowerCase();
+  if (!isHost(host)) { errMsg(t("Ongeldig domein.")); return; }
+  if (!isTarget(ip)) { errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
+  if (ip === host) { errMsg(t("Het doel kan niet het domein zelf zijn.")); return; }
+  errMsg("");
+  const s = await load();
+  const group = $("addGroup").hidden ? DEFAULT_GROUP : $("addGroup").value;
+  const next = s.rules.filter((r) => r.host !== host);
+  const rule = { host, ip, enabled: true, group };
+  const note = cleanText($("note").value, NOTE_MAX);
+  if (note) rule.note = note;
+  next.push(rule);
+  $("host").value = ""; $("ip").value = ""; $("note").value = "";
+  // Toevoegen aan een groep die uit staat: groep aanzetten (met "één groep tegelijk" gaan de andere uit).
+  const g = s.groups.find((x) => x.id === group);
+  const groups = g && !g.enabled ? setGroupEnabled(s, group, true).groups : s.groups;
+  update({ rules: next, groups, enabled: true, lastIp: ip });
 };
 
 $("bulkBtn").onclick = async () => {
-  const ip = $("bulkIp").value.trim();
-  if (!isIp(ip)) { $("err").textContent = t("Ongeldig IP-adres."); return; }
-  $("err").textContent = "";
-  const { rules } = await load();
+  const raw = $("bulkIp").value.trim();
+  const ip = isIp(raw) ? raw : raw.toLowerCase();
+  if (!isTarget(ip)) { errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
+  errMsg("");
   $("bulkIp").value = "";
-  update({ rules: rules.map((r) => ({ ...r, ip })) });
+  mutateRules((rules) => rules.map((r) => ({ ...r, ip })));
 };
 
 // --- Chrome-commando ---
@@ -341,10 +557,9 @@ function renderCommand(rules) {
   $("copyCmd").disabled = !cmd;
   $("openWin").disabled = !cmd;
 }
-$("os").onchange = async () => { os = $("os").value; renderCommand((await load()).rules); };
+$("os").onchange = async () => { os = $("os").value; renderCommand(activeRules({ ...(await load()), enabled: true })); };
 $("openWin").onclick = async () => {
-  const { rules } = await load();
-  const active = rules.filter((r) => r.enabled !== false).map(({ host, ip }) => ({ host, ip }));
+  const active = activeRules({ ...(await load()), enabled: true }).map(({ host, ip }) => ({ host, ip }));
   const btn = $("openWin");
   try {
     // Alleen origin + pad: de query (kan tokens bevatten) hoort niet in de opdrachtregel van Chrome.
@@ -365,13 +580,13 @@ $("copyCmd").onclick = () => copy($("cmdText").value, $("copyCmd"), t("Gekopieer
 // --- Delen ---
 $("copyHosts").onclick = () => copy($("hostsText").value, $("copyHosts"));
 $("applyHosts").onclick = async () => {
-  const { rules: incoming, skipped } = parseHosts($("hostsText").value);
-  if (!incoming.length) { $("moreErr").textContent = t("Geen geldige regels gevonden."); return; }
-  const { rules } = await load();
-  const map = new Map(rules.map((r) => [r.host, r]));
-  incoming.forEach((r) => map.set(r.host, r));
-  $("moreErr").textContent = skipped ? t("{n} regel(s) overgeslagen.", { n: skipped }) : "";
-  update({ rules: [...map.values()], enabled: true });
+  const parsed = parseHosts($("hostsText").value);
+  if (!parsed.rules.length) { $("moreErr").textContent = t("Geen geldige regels gevonden."); return; }
+  const s = await load();
+  const { state: next, added, changed } = mergeParsed(s, parsed, s.lastGroup || DEFAULT_GROUP);
+  $("moreErr").textContent = "";
+  $("shareMsg").textContent = t("{a} nieuw, {c} gewijzigd.", { a: added, c: changed }) + (parsed.skipped ? " " + t("{n} regel(s) overgeslagen.", { n: parsed.skipped }) : "");
+  update({ rules: next.rules, groups: next.groups, enabled: true });
 };
 
 // --- Indicator in de pagina ---
@@ -404,6 +619,7 @@ async function renderIndicator() {
   $("indShowIp").checked = ind.showIp;
   $("indHideHover").checked = ind.hideHover;
   $("indDismiss").checked = ind.dismiss;
+  $("indGroupColor").checked = ind.groupColor;
   const sw = $("indColors");
   if (!sw.childElementCount) {
     for (const c of COLORS) {
@@ -436,7 +652,7 @@ function previewIndicator(cfg) {
   const ip = "203.0.113.10";
   drawIndicator({
     ...cfg, fg: textColor(cfg.color),
-    text: renderLabel(cfg.text, { ip, host: tab?.host || t("voorbeeld.nl"), source: "Host Override" }, cfg.showIp),
+    text: renderLabel(cfg.text, { ip, host: tab?.host || t("voorbeeld.nl"), source: "Host Override", group: t("Klant X – staging") }, cfg.showIp),
   }, $("indPreview"));
 }
 
@@ -446,7 +662,7 @@ async function saveIndicator(patch) {
   renderIndicator();
 }
 $("pageBadge").onchange = async () => { await chrome.storage.local.set({ pageBadge: $("pageBadge").checked }); renderIndicator(); };
-for (const [id, k] of [["indOnRule", "onRule"], ["indOnHosts", "onHosts"], ["indOnDiffers", "onDiffers"], ["indShowIp", "showIp"], ["indHideHover", "hideHover"], ["indDismiss", "dismiss"]]) {
+for (const [id, k] of [["indOnRule", "onRule"], ["indOnHosts", "onHosts"], ["indOnDiffers", "onDiffers"], ["indShowIp", "showIp"], ["indHideHover", "hideHover"], ["indDismiss", "dismiss"], ["indGroupColor", "groupColor"]]) {
   $(id).onchange = () => saveIndicator({ [k]: $(id).checked });
 }
 $("indStyle").onchange = () => saveIndicator({ style: $("indStyle").value });
@@ -537,9 +753,10 @@ $("hostsLoad").onclick = loadHostsFile;
 $("hostsCopy").onclick = () => copy(formatHosts(hostsRules()), $("hostsCopy"));
 $("hostsImport").onclick = async () => {
   const incoming = hostsRules();
-  const { rules } = await load();
+  const s = await load();
+  const rules = s.rules;
   const have = new Set(rules.map((r) => r.host));
-  const add = incoming.filter((r) => !have.has(r.host)).map((r) => ({ ...r, enabled: true }));
+  const add = incoming.filter((r) => !have.has(r.host)).map((r) => ({ ...r, enabled: true, group: s.lastGroup && s.groups.some((g) => g.id === s.lastGroup && !g.sub) ? s.lastGroup : DEFAULT_GROUP, note: t("uit hosts-bestand") }));
   $("hostsMsg").textContent = add.length
     ? t("{n} regel(s) toegevoegd aan Host Override. Je hosts-bestand blijft ongewijzigd.", { n: add.length })
     : t("Alles staat al in Host Override.");

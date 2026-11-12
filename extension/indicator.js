@@ -10,6 +10,7 @@ export const INDICATOR_DEFAULTS = {
   edge: "top", // top | bottom (balk)
   color: COLORS[0], text: DEFAULT_TEXT, size: "m", opacity: 92,
   hideHover: false, dismiss: true, showIp: true,
+  groupColor: true, // bij een Host Override-regel de kleur van de groep gebruiken
 };
 const pick = (v, list, def) => (list.includes(v) ? v : def);
 
@@ -28,7 +29,7 @@ export function normIndicator(raw) {
     text: typeof r.text === "string" ? r.text.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 80) : d.text,
     size: pick(r.size, ["s", "m", "l"], d.size),
     opacity: Number.isFinite(op) ? Math.min(100, Math.max(30, op)) : d.opacity,
-    hideHover: bool("hideHover"), dismiss: bool("dismiss"), showIp: bool("showIp"),
+    hideHover: bool("hideHover"), dismiss: bool("dismiss"), showIp: bool("showIp"), groupColor: bool("groupColor"),
   };
 }
 
@@ -41,9 +42,10 @@ export function textColor(hex) {
 }
 
 // "TEST · {ip}" -> "TEST · 1.2.3.4". Zonder IP verdwijnen {ip} en losse scheidingstekens eromheen.
-export function renderLabel(tpl, { ip = "", host = "", source = "" }, showIp = true) {
-  let s = (tpl && tpl.trim() ? tpl : DEFAULT_TEXT).replace(/\{(ip|host|source)\}/g, (_, k) =>
-    k === "ip" ? (showIp ? ip : "") : k === "host" ? host : source);
+// {group} = naam van de groep van de Host Override-regel (leeg bij hosts-bestand of afwijkende DNS).
+export function renderLabel(tpl, { ip = "", host = "", source = "", group = "" }, showIp = true) {
+  let s = (tpl && tpl.trim() ? tpl : DEFAULT_TEXT).replace(/\{(ip|host|source|group)\}/g, (_, k) =>
+    k === "ip" ? (showIp ? ip : "") : k === "host" ? host : k === "group" ? group : source);
   s = s.replace(/\(\s*\)|\[\s*\]/g, "").replace(/\s{2,}/g, " ").trim();
   s = s.replace(/^[\s·|:,-]+|[\s·|:,-]+$/g, "").replace(/([·|,-])(\s*[·|,-])+/g, "$1").trim();
   return (s || "TEST").slice(0, 80);

@@ -19,6 +19,7 @@ const require = createRequire(import.meta.url);
 const tools = require(path.join(EXT, "helper", "dnstools.js"));
 const { classify, normIp, sameNet, triggers } = await import(path.join(EXT, "detect.js"));
 const { normIndicator, renderLabel, textColor, INDICATOR_DEFAULTS } = await import(path.join(EXT, "indicator.js"));
+const M = await import(path.join(EXT, "model.js"));
 
 let passed = 0, failed = 0;
 async function test(name, fn) {
@@ -155,6 +156,80 @@ await test("renderLabel: sjabloon, zonder IP geen losse scheidingstekens", () =>
 await test("textColor: wit op donker, donker op licht", () => {
   assert.equal(textColor("#c2410c"), "#ffffff");
   assert.equal(textColor("#ffe066"), "#111111");
+});
+
+// ---------- 3b. Model: groepen, notities, doelen, hosts-formaat ----------
+console.log("Model: groepen, notities, doelen en hosts-formaat");
+await test("migratie: losse regels (1.7) komen in de standaardgroep, ongeldige vallen weg", () => {
+  const s = M.normState({ enabled: true, rules: [{ host: "A.nl", ip: "1.2.3.4" }, { host: "b.nl", ip: "999.1.1.1" }, { host: "c.nl", ip: "x;rm -rf" }, { host: "a.nl", ip: "5.6.7.8" }] });
+  assert.equal(s.groups.length, 1); assert.equal(s.groups[0].id, "default");
+  assert.deepEqual(s.rules, [{ host: "a.nl", ip: "1.2.3.4", enabled: true, group: "default" }]);
+  assert.equal(M.activeRules({ enabled: true, rules: [{ host: "a.nl", ip: "1.2.3.4" }] }).length, 1, "oude toestand zonder groepen werkt");
+});
+await test("doel: IP of strikte hostnaam; geen wildcard, geen numerieke TLD, geen shell-tekens", () => {
+  for (const ok of ["1.2.3.4", "2001:db8::1", "server123.hostingpartij.nl", "localhost", "a-b.example.co.uk"]) assert.ok(M.isTarget(ok), ok);
+  for (const bad of ["*.x.nl", "999.1.1.1", "10.0.0", "a b.nl", "x.nl;id", "$(id).nl", "-a.nl", "a..nl", "", "x".repeat(254) + ".nl", "http://x.nl"]) assert.ok(!M.isTarget(bad), bad);
+  assert.equal(M.targetKind("srv.x.nl"), "host"); assert.equal(M.targetKind("1.2.3.4"), "ip");
+});
+await test("groep uit = regels uit; hoofdschakelaar uit = alles uit; eerste treffer wint", () => {
+  const s = M.normState({ enabled: true, groups: [{ id: "default" }, { id: "stg", name: "Klant X – staging", color: "#1971c2", enabled: false }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1", group: "stg" }, { host: "*.b.nl", ip: "2.2.2.2" }, { host: "c.b.nl", ip: "3.3.3.3" }] });
+  assert.deepEqual(M.activeRules(s).map((r) => r.host), ["*.b.nl", "c.b.nl"]);
+  assert.equal(M.matchRule(M.activeRules(s), "c.b.nl").ip, "2.2.2.2");
+  assert.equal(M.activeRules({ ...s, enabled: false }).length, 0);
+  assert.equal(M.normState({ rules: [{ host: "x.nl", ip: "1.1.1.1", group: "bestaat-niet" }] }).rules[0].group, "default");
+});
+await test("één groep tegelijk: aanzetten zet de rest uit; badgekleur volgt de enige actieve groep", () => {
+  let s = M.normState({ enabled: true, exclusiveGroups: true, groups: [{ id: "default" }, { id: "g1", color: "#2b8a3e" }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "b.nl", ip: "2.2.2.2", group: "g1" }] });
+  s = M.setGroupEnabled(s, "g1", true);
+  assert.deepEqual(s.groups.map((g) => g.enabled), [false, true]);
+  assert.deepEqual(M.activeGroups(s).map((g) => g.color), ["#2b8a3e"]);
+  const multi = M.setGroupEnabled({ ...s, exclusiveGroups: false }, "default", true);
+  assert.equal(multi.groups.filter((g) => g.enabled).length, 2);
+});
+await test("notitie en groepsnaam: stuurtekens weg, ingekort", () => {
+  const s = M.normState({ groups: [{ id: "default", name: "A\nB\u0000" + "x".repeat(100) }], rules: [{ host: "a.nl", ip: "1.1.1.1", note: "regel1\r\nregel2" + "y".repeat(200) }] });
+  assert.ok(!/[\n\r\u0000]/.test(s.groups[0].name) && s.groups[0].name.length <= M.NAME_MAX);
+  assert.ok(s.rules[0].note.startsWith("regel1 regel2") && s.rules[0].note.length <= M.NOTE_MAX);
+});
+await test("hosts-formaat: groepen (# group: Naam #kleur [off]), notities en hostnaam-doelen gaan heen en terug", () => {
+  const s = M.normState({ groups: [{ id: "default" }, { id: "g1", name: "Klant X – staging", color: "#1971c2", enabled: false }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1", note: "nieuwe server" }, { host: "b.nl", ip: "srv1.hosting.nl", group: "g1" }, { host: "c.nl", ip: "::1", group: "g1", enabled: false }] });
+  const text = M.formatHosts(s.rules, s.groups);
+  assert.match(text, /^# group: Default #c2410c\n1\.1\.1\.1 a\.nl  # nieuwe server\n\n# group: Klant X – staging #1971c2 off\nsrv1\.hosting\.nl b\.nl\n#off ::1 c\.nl$/);
+  const p = M.parseHosts(text);
+  assert.equal(p.skipped, 0);
+  assert.deepEqual(p.groups.map((g) => [g.name, g.color, g.enabled]), [["Default", "#c2410c", true], ["Klant X – staging", "#1971c2", false]]);
+  assert.deepEqual(p.rules.map((r) => [r.host, r.ip, r.enabled, r.note || "", r.groupName]), [
+    ["a.nl", "1.1.1.1", true, "nieuwe server", "Default"], ["b.nl", "srv1.hosting.nl", true, "", "Klant X – staging"], ["c.nl", "::1", false, "", "Klant X – staging"]]);
+  // In een lege toestand importeren: groep wordt aangemaakt, Default wordt de standaardgroep.
+  const m = M.mergeParsed(M.normState({}), p, "default", () => 0.5);
+  assert.equal(m.added, 3); assert.equal(m.state.groups.length, 2);
+  const g1 = m.state.groups.find((g) => g.name === "Klant X – staging");
+  assert.equal(g1.enabled, false); assert.equal(g1.color, "#1971c2");
+  assert.equal(m.state.rules.find((r) => r.host === "a.nl").group, "default");
+  assert.equal(m.state.rules.find((r) => r.host === "b.nl").group, g1.id);
+  // Nog een keer: niets nieuw, niets gewijzigd, geen dubbele groep.
+  const again = M.mergeParsed(m.state, p, "default", () => 0.7);
+  assert.equal(again.added + again.changed, 0); assert.equal(again.state.groups.length, 2);
+});
+await test("parseHosts: gewone hosts-regels, rommel en injectie worden overgeslagen", () => {
+  const p = M.parseHosts("127.0.0.1 localhost\n1.2.3.4 a.nl www.a.nl #c\nfoo\n1.2.3.4 $(id).nl\n`id` b.nl\n# group: \n5.6.7.8 c.nl");
+  assert.deepEqual(p.rules.map((r) => r.host), ["localhost", "a.nl", "www.a.nl", "c.nl"]);
+  assert.equal(p.rules[1].note, "c"); assert.equal(p.skipped, 3);
+});
+await test("indicator: {group} in het label", () => {
+  assert.equal(renderLabel("{group} · {ip}", { ip: "1.2.3.4", group: "Klant X" }), "Klant X · 1.2.3.4");
+  assert.equal(renderLabel("{group} · {ip}", { ip: "1.2.3.4" }), "1.2.3.4");
+  assert.equal(normIndicator({}).groupColor, true);
+});
+await test("registreerbaar domein (bij benadering)", () => {
+  assert.equal(M.regDomain("www.shop.example.nl"), "example.nl");
+  assert.equal(M.regDomain("cdn.example.co.uk"), "example.co.uk");
+  assert.equal(M.regDomain("*.example.com"), "example.com");
+  assert.equal(M.regDomain("foo.github.io"), "foo.github.io");
+  assert.equal(M.regDomain("1.2.3.4"), "1.2.3.4");
 });
 
 // ---------- 4. Helper: /__hosts ----------

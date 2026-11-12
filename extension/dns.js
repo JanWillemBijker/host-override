@@ -1,4 +1,4 @@
-import { isHost, isIp, matchRule, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
+import { isHost, isIp, matchRule, activeRules, loadState, helperStatus, helperFetch, EXPECTED_HELPER } from "./common.js";
 import { t } from "./i18n.js";
 
 const RESOLVERS = [
@@ -92,9 +92,10 @@ async function run(name, resolver) {
   findings = [];
   for (const id of PANES) loading(id);
   paintDots();
-  const { rules = [] } = await chrome.storage.local.get("rules");
+  const state = await loadState();
   const testIp = $("dTestIp").value.trim();
-  const ruleHit = matchRule(rules.filter((r) => r.enabled !== false), name);
+  // Regels van groepen die aan staan (ook als de hoofdschakelaar uit staat: dan vergelijk je live met wat je zou testen).
+  const ruleHit = matchRule(activeRules({ ...state, enabled: true }), name);
   const override = ruleHit || (isIp(testIp) ? { ip: testIp } : null);
   const sec = (s) => (l, x) => live() && addF(l, x, s);
 

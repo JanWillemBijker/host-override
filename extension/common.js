@@ -47,7 +47,9 @@ export async function helperStatus() {
       verified = await crypto.subtle.verify("HMAC", key, fromHex(json.proof), new TextEncoder().encode("host-override/status:" + nonce));
     } catch { verified = false; }
   }
-  return { reachable: true, version, configured, verified };
+  // features: uitbreidingen binnen protocol 6 (oudere v6-helpers sturen dit niet mee).
+  const features = Array.isArray(json?.features) ? json.features.filter((f) => typeof f === "string").slice(0, 30) : [];
+  return { reachable: true, version, configured, verified, features };
 }
 
 // Korte cache per pagina/achtergrond, zodat niet elke DNS-vraag eerst een status-check doet.
@@ -74,69 +76,14 @@ export async function helperFetch(path, { method = "POST", body } = {}) {
   return res;
 }
 
-// Strikte validatie: deze waarden komen in de PAC-regel, de helper en (gekopieerde) shell-commando's.
-// Hostnaam: labels van 1-63 tekens (a-z, 0-9, -), niet beginnend of eindigend met -, totaal max 253.
-// Optioneel "*." vooraan voor domein + alle subdomeinen.
-const LABEL = "(?!-)[a-z0-9-]{1,63}(?<!-)";
-const HOST_RE = new RegExp(`^(\\*\\.)?${LABEL}(\\.${LABEL})*$`, "i");
-const V4_PART = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
-const V4_RE = new RegExp(`^${V4_PART}(\\.${V4_PART}){3}$`);
+// Validatie, groepen, matchen en het hosts-formaat staan in model.js (puur, ook in Node te testen).
+import { isHost, isIp, isTarget, isTargetHost, validRules, activeRules, matchRule, formatHosts, parseHosts, normState } from "./model.js";
+export { isHost, isIp, isTarget, isTargetHost, validRules, activeRules, matchRule, formatHosts, parseHosts, normState };
 
-export const isHost = (h) => typeof h === "string" && h.length <= 255 && HOST_RE.test(h);
-
-export function isIp(ip) {
-  if (typeof ip !== "string" || ip.length > 45) return false;
-  if (V4_RE.test(ip)) return true;
-  // IPv6: alleen hex, dubbele punten en (voor ::ffff:1.2.3.4) punten; daarna door de URL-parser laten controleren.
-  if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return false;
-  try { return new URL(`http://[${ip}]/`).hostname.length > 2; } catch { return false; }
-}
-
-// Alleen geldige regels doorlaten (bescherming tegen beschadigde of handmatig aangepaste opslag).
-export const validRules = (rules) =>
-  (Array.isArray(rules) ? rules : []).filter((r) => r && isHost(r.host) && isIp(r.ip));
-
-export function activeRules({ enabled, rules }) {
-  return enabled ? validRules(rules).filter((r) => r.enabled !== false) : [];
-}
-
-// Zelfde matchlogica als de PAC-regel en de proxy: exact, of "*.domein" voor domein + subdomeinen.
-export function matchRule(rules, host) {
-  const h = host.toLowerCase();
-  for (const r of rules) {
-    const p = r.host.toLowerCase();
-    if (p.startsWith("*.")) {
-      const base = p.slice(2);
-      if (h === base || h.endsWith("." + base)) return r;
-    } else if (h === p) return r;
-  }
-  return null;
-}
-
-// Hosts-bestand-formaat: "1.2.3.4 voorbeeld.nl www.voorbeeld.nl". Uitgezette regels: "#off 1.2.3.4 voorbeeld.nl".
-export function formatHosts(rules) {
-  return rules.map((r) => `${r.enabled === false ? "#off " : ""}${r.ip} ${r.host}`).join("\n");
-}
-
-export function parseHosts(text) {
-  const rules = [];
-  let skipped = 0;
-  for (let line of text.split(/\r?\n/)) {
-    line = line.trim();
-    if (!line) continue;
-    let enabled = true;
-    if (/^#off\s/i.test(line)) { enabled = false; line = line.slice(4).trim(); }
-    else if (line.startsWith("#")) continue;
-    line = line.replace(/\s+#.*$/, "");
-    const [ip, ...hosts] = line.split(/\s+/);
-    if (!isIp(ip) || hosts.length === 0) { skipped++; continue; }
-    for (const h of hosts) {
-      const host = h.toLowerCase();
-      if (isHost(host)) rules.push({ host, ip, enabled });
-      else skipped++;
-    }
-  }
-  return { rules, skipped };
+// Alles wat de extensie over regels en groepen bewaart, genormaliseerd (migreert ook oude losse regels).
+export const STATE_KEYS = ["enabled", "rules", "groups", "subs", "exclusiveGroups"];
+export async function loadState() {
+  return normState(await chrome.storage.local.get(STATE_KEYS));
 }
 
 // ---------- Besturingssysteem ----------
@@ -153,6 +100,7 @@ export function detectOS() {
 export function resolverRules(rules) {
   const parts = [];
   for (const r of validRules(rules).filter((x) => x.enabled !== false)) {
+    // Doel is een IP of (gevalideerde) hostnaam; Chrome's MAP-regel accepteert beide.
     const ip = r.ip.includes(":") ? `[${r.ip}]` : r.ip;
     if (r.host.startsWith("*.")) parts.push(`MAP ${r.host.slice(2)} ${ip}`, `MAP ${r.host} ${ip}`);
     else parts.push(`MAP ${r.host} ${ip}`);
