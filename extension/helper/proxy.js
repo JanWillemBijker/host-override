@@ -13,10 +13,26 @@ const { spawn } = require("child_process");
 let tools = null; // DNS-tools (dnstools.js), optioneel naast proxy.js
 try { tools = require("./dnstools.js"); } catch { /* oudere installatie: DNS-pagina meldt dat een update nodig is */ }
 
-const HELPER_VERSION = 4;
+const HELPER_VERSION = 5;
 const PORT = Number(process.env.PORT || 8899);
 const DIR = path.join(os.homedir(), ".host-override");
 const FILE = path.join(DIR, "rules.json");
+const CONFIG = path.join(DIR, "config.json");
+
+// Strikte hostnaam-controle (zelfde regel als de extensie): labels a-z, 0-9, -, optioneel "*." vooraan.
+const HOST_RE = /^(\*\.)?(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/i;
+const isHost = (h) => typeof h === "string" && h.length <= 255 && HOST_RE.test(h);
+
+// Welke extensie(s) de helper mogen aansturen. Het setup-commando uit de extensie schrijft config.json
+// met het ID van die extensie. Zonder config.json (handmatige installatie) geldt elke chrome-extension://.
+let allowedOrigins = null;
+function loadConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG, "utf8").replace(/^\uFEFF/, ""));
+    const list = (cfg.origins || []).filter((o) => /^chrome-extension:\/\/[a-p]{32}$/.test(o));
+    allowedOrigins = list.length ? list : null;
+  } catch { allowedOrigins = null; }
+}
 
 let rules = []; // [{host, ip}]
 
@@ -35,7 +51,7 @@ function save() {
 }
 
 function valid(list) {
-  return Array.isArray(list) && list.every((r) => r && typeof r.host === "string" && net.isIP(r.ip));
+  return Array.isArray(list) && list.length <= 5000 && list.every((r) => r && isHost(r.host) && typeof r.ip === "string" && net.isIP(r.ip));
 }
 
 function lookup(hostname) {
@@ -56,8 +72,16 @@ function splitHostPort(s, defPort) {
 }
 
 // Alleen de extensie mag regels lezen of zetten, geen willekeurige website via localhost.
+// - Origin moet de eigen extensie zijn (websites kunnen geen chrome-extension://-origin sturen).
+// - De eigen header dwingt bij cross-origin verzoeken een CORS-preflight af, die hier nooit slaagt.
+// - De Host-header moet 127.0.0.1/localhost zijn (tegen DNS-rebinding).
 function fromExtension(req) {
-  return (req.headers.origin || "").startsWith("chrome-extension://") && req.headers["x-host-override"] === "1";
+  const origin = req.headers.origin || "";
+  const okOrigin = allowedOrigins ? allowedOrigins.includes(origin) : /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+  return okOrigin && localHost(req) && req.headers["x-host-override"] === "1";
+}
+function localHost(req) {
+  return [`127.0.0.1:${PORT}`, `localhost:${PORT}`].includes(String(req.headers.host || "").toLowerCase());
 }
 
 function control(req, res) {
@@ -78,7 +102,6 @@ function control(req, res) {
 }
 
 // ---------- Apart Chrome-venster starten ----------
-const HOST_RE = /^(\*\.)?([a-z0-9-]+\.)*[a-z0-9-]+$/i;
 
 function resolverRules(list) {
   const parts = [];
@@ -120,7 +143,7 @@ function launch(req, res) {
     try { data = JSON.parse(body); } catch { return reply(400, { error: "ongeldige invoer" }); }
     const list = data.rules;
     if (!Array.isArray(list) || list.length === 0 || list.length > 500 ||
-        !list.every((r) => r && typeof r.host === "string" && HOST_RE.test(r.host) && typeof r.ip === "string" && net.isIP(r.ip))) {
+        !list.every((r) => r && isHost(r.host) && typeof r.ip === "string" && net.isIP(r.ip))) {
       return reply(400, { error: "geen geldige regels" });
     }
     let url = null;
@@ -158,7 +181,7 @@ const DNS_API = {
     return tools.trace(d.name);
   },
   async "/__check"(d) {
-    if (typeof d.host !== "string" || !HOST_RE.test(d.host) || !net.isIP(d.ip)) throw new Error("ongeldige invoer");
+    if (!isHost(d.host) || d.host.startsWith("*.") || typeof d.ip !== "string" || !net.isIP(d.ip)) throw new Error("ongeldige invoer");
     return tools.check(d.host, d.ip);
   },
 };
@@ -180,7 +203,9 @@ function dnsApi(req, res) {
 const server = http.createServer((req, res) => {
   if (req.url.startsWith("/__rules")) return control(req, res);
   if (req.url.startsWith("/__launch")) return launch(req, res);
-  if (DNS_API[req.url.split("?")[0]]) return dnsApi(req, res);
+  if (Object.hasOwn(DNS_API, req.url.split("?")[0])) return dnsApi(req, res);
+  // Eigen pagina's (geen proxy-verzoek): alleen via 127.0.0.1/localhost, niet via een herbonden domeinnaam.
+  if (req.url.startsWith("/") && !localHost(req)) { res.writeHead(403).end("forbidden"); return; }
   if (req.url === "/__status") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ helper: HELPER_VERSION, rules: rules.length }));
@@ -224,4 +249,5 @@ server.on("error", (e) => {
 });
 
 load();
-server.listen(PORT, "127.0.0.1", () => console.log(`Host Override proxy op 127.0.0.1:${PORT} (${rules.length} regels geladen)`));
+loadConfig();
+server.listen(PORT, "127.0.0.1", () => console.log(`Host Override proxy op 127.0.0.1:${PORT} (${rules.length} regels geladen, ${allowedOrigins ? "alleen " + allowedOrigins.join(", ") : "elke extensie (geen config.json)"})`));

@@ -1,18 +1,31 @@
 // Gedeelde hulpfuncties voor achtergrondscript en popup.
 export const PORT = 8899;
-export const EXPECTED_HELPER = 4; // verhoog als helper/proxy.js een nieuwe versie krijgt
+export const EXPECTED_HELPER = 5; // verhoog als helper/proxy.js een nieuwe versie krijgt
 
-const HOST_RE = /^(\*\.)?([a-z0-9-]+\.)*[a-z0-9-]+$/i;
+// Strikte validatie: deze waarden komen in de PAC-regel, de helper en (gekopieerde) shell-commando's.
+// Hostnaam: labels van 1-63 tekens (a-z, 0-9, -), niet beginnend of eindigend met -, totaal max 253.
+// Optioneel "*." vooraan voor domein + alle subdomeinen.
+const LABEL = "(?!-)[a-z0-9-]{1,63}(?<!-)";
+const HOST_RE = new RegExp(`^(\\*\\.)?${LABEL}(\\.${LABEL})*$`, "i");
+const V4_PART = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const V4_RE = new RegExp(`^${V4_PART}(\\.${V4_PART}){3}$`);
 
-export const isHost = (h) => HOST_RE.test(h);
+export const isHost = (h) => typeof h === "string" && h.length <= 255 && HOST_RE.test(h);
 
 export function isIp(ip) {
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return ip.split(".").every((n) => +n <= 255);
-  return ip.includes(":") && /^[0-9a-f:.]+$/i.test(ip);
+  if (typeof ip !== "string" || ip.length > 45) return false;
+  if (V4_RE.test(ip)) return true;
+  // IPv6: alleen hex, dubbele punten en (voor ::ffff:1.2.3.4) punten; daarna door de URL-parser laten controleren.
+  if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return false;
+  try { return new URL(`http://[${ip}]/`).hostname.length > 2; } catch { return false; }
 }
 
+// Alleen geldige regels doorlaten (bescherming tegen beschadigde of handmatig aangepaste opslag).
+export const validRules = (rules) =>
+  (Array.isArray(rules) ? rules : []).filter((r) => r && isHost(r.host) && isIp(r.ip));
+
 export function activeRules({ enabled, rules }) {
-  return enabled ? rules.filter((r) => r.enabled !== false) : [];
+  return enabled ? validRules(rules).filter((r) => r.enabled !== false) : [];
 }
 
 // Zelfde matchlogica als de PAC-regel en de proxy: exact, of "*.domein" voor domein + subdomeinen.
@@ -67,7 +80,7 @@ export function detectOS() {
 // ---------- Apart Chrome-venster met dezelfde DNS-regels ----------
 export function resolverRules(rules) {
   const parts = [];
-  for (const r of rules.filter((x) => x.enabled !== false)) {
+  for (const r of validRules(rules).filter((x) => x.enabled !== false)) {
     const ip = r.ip.includes(":") ? `[${r.ip}]` : r.ip;
     if (r.host.startsWith("*.")) parts.push(`MAP ${r.host.slice(2)} ${ip}`, `MAP ${r.host} ${ip}`);
     else parts.push(`MAP ${r.host} ${ip}`);
@@ -94,9 +107,13 @@ export function buildChromeCommand(rules, os, profile = "chrome-test") {
 // ---------- Setup-commando voor de helper ----------
 const HELPER_FILES = ["proxy.js", "dnstools.js"];
 
-// `read(pad)` geeft de tekst van een meegeleverd bestand terug.
-export async function buildSetupCommand(os, read) {
+// `read(pad)` geeft de tekst van een meegeleverd bestand terug. `extId` is het ID van deze extensie:
+// de helper accepteert daarna alleen nog verzoeken van precies deze extensie (config.json).
+export async function buildSetupCommand(os, read, extId = chrome.runtime.id) {
   const files = await Promise.all(HELPER_FILES.map(async (f) => [f, (await read(`helper/${f}`)).trimEnd()]));
+  if (/^[a-p]{32}$/.test(extId || "")) {
+    files.push(["config.json", JSON.stringify({ origins: [`chrome-extension://${extId}`] })]);
+  }
   if (os === "win" || os === "winps") {
     const setup = (await read("helper/setup.ps1")).trimEnd();
     let out = '$d = "$env:USERPROFILE\\.host-override"\nNew-Item -ItemType Directory -Force -Path $d | Out-Null\n';

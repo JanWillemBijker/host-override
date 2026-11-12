@@ -124,7 +124,7 @@ async function renderSite(state) {
   const granted = await chrome.permissions.contains(ALL_SITES);
 
   const pill = $("siteKind");
-  if (rule) { pill.textContent = t("Override actief"); pill.className = "pill override"; }
+  if (rule) { pill.textContent = t("Override naar {ip}", { ip: rule.ip }); pill.className = "pill override"; }
   else { pill.textContent = t("Live"); pill.className = "pill live"; }
 
   $("liveIp").textContent = live || (granted && !rule ? t("Ververs de pagina") : "-");
@@ -311,11 +311,11 @@ $("openWin").onclick = async () => {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || `status ${res.status}`);
-    $("err").textContent = "";
+    $("moreErr").textContent = "";
     btn.textContent = t("Geopend");
     setTimeout(() => (btn.textContent = t("Open testvenster")), 2000);
   } catch (e) {
-    $("err").textContent = t("Openen mislukt ({e}). Gebruik \"Kopieer commando\".", { e: e.message });
+    $("moreErr").textContent = t("Openen mislukt ({e}). Gebruik \"Kopieer commando\".", { e: e.message });
   }
 };
 $("copyCmd").onclick = () => copy($("cmdText").value, $("copyCmd"), t("Gekopieerd, plak in je terminal"));
@@ -324,11 +324,11 @@ $("copyCmd").onclick = () => copy($("cmdText").value, $("copyCmd"), t("Gekopieer
 $("copyHosts").onclick = () => copy($("hostsText").value, $("copyHosts"));
 $("applyHosts").onclick = async () => {
   const { rules: incoming, skipped } = parseHosts($("hostsText").value);
-  if (!incoming.length) { $("err").textContent = t("Geen geldige regels gevonden."); return; }
+  if (!incoming.length) { $("moreErr").textContent = t("Geen geldige regels gevonden."); return; }
   const { rules } = await load();
   const map = new Map(rules.map((r) => [r.host, r]));
   incoming.forEach((r) => map.set(r.host, r));
-  $("err").textContent = skipped ? t("{n} regel(s) overgeslagen.", { n: skipped }) : "";
+  $("moreErr").textContent = skipped ? t("{n} regel(s) overgeslagen.", { n: skipped }) : "";
   update({ rules: [...map.values()], enabled: true });
 };
 

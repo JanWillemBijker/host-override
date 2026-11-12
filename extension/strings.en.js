@@ -21,6 +21,7 @@ export const EN = {
  "Actief voor 1 regel": "Active for 1 rule",
  "Actief voor {n} regels": "Active for {n} rules",
  "Override actief": "Override active",
+ "Override naar {ip}": "Override to {ip}",
  "Live": "Live",
  "Ververs de pagina": "Reload the page",
  "Zoeken...": "Looking up...",
@@ -220,7 +221,7 @@ export const EN = {
  "Test een site op een andere server, in je gewone Chrome. Incognito blijft de live site tonen.": "Test a site on another server in your normal Chrome. Incognito keeps showing the live site.",
  "Installeer de helper": "Install the helper",
  "(eenmalig)": "(one-time)",
- "Chrome mag zelf geen IP-adressen koppelen. Een klein programma op je eigen computer doet dat. Het is alleen bereikbaar vanaf deze computer en stuurt niets naar buiten.": "Chrome is not allowed to map IP addresses by itself. A small program on your own computer does that. It is only reachable from this computer and sends nothing out.",
+ "Chrome mag zelf geen IP-adressen koppelen. Een klein programma op je eigen computer doet dat. Het is alleen bereikbaar vanaf deze computer, accepteert alleen opdrachten van deze extensie en verstuurt geen gegevens naar de maker of derden.": "Chrome is not allowed to map IP addresses by itself. A small program on your own computer does that. It is only reachable from this computer, only accepts commands from this extension and sends no data to the developer or third parties.",
  "Jouw systeem": "Your system",
  "Toon het commando": "Show the command",
  "Pin het icoon": "Pin the icon",
@@ -228,5 +229,6 @@ export const EN = {
  "Voeg een domein toe": "Add a domain",
  "Handig om te weten": "Good to know",
  "Met <b>*.voorbeeld.nl</b> pak je ook alle subdomeinen.": "With <b>*.example.com</b> you also cover all subdomains.",
- "Laat \"Toestaan in incognito\" <b>uit</b>, anders zie je daar ook de testserver.": "Keep \"Allow in Incognito\" <b>off</b>, otherwise you will see the test server there too."
+ "Laat \"Toestaan in incognito\" <b>uit</b>, anders zie je daar ook de testserver.": "Keep \"Allow in Incognito\" <b>off</b>, otherwise you will see the test server there too.",
+ "Gemaakt door <a href=\"https://bijbijker.nl\" target=\"_blank\" rel=\"noopener\">BijBijker</a>": "Made by <a href=\"https://bijbijker.nl\" target=\"_blank\" rel=\"noopener\">BijBijker</a>",
 };

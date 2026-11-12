@@ -1,4 +1,4 @@
-import { PORT, EXPECTED_HELPER, activeRules, matchRule, reloadIfAffected } from "./common.js";
+import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected } from "./common.js";
 
 const PROXY = `127.0.0.1:${PORT}`;
 const BASE = `http://${PROXY}`;
@@ -8,8 +8,10 @@ async function getState() {
   return { enabled, rules };
 }
 
+// `rules` is al gevalideerd (activeRules -> validRules): alleen [a-z0-9.-] en "*." komen in het script,
+// en JSON.stringify zorgt dat het altijd een geldige string-array blijft.
 function buildPac(rules) {
-  const patterns = JSON.stringify(rules.map((r) => r.host.toLowerCase()));
+  const patterns = JSON.stringify(rules.filter((r) => isHost(r.host)).map((r) => r.host.toLowerCase()));
   return `function FindProxyForURL(url, host) {
   host = host.toLowerCase();
   var p = ${patterns};
@@ -60,7 +62,7 @@ async function apply() {
     scope: "regular",
   });
   const ok = await pushToProxy(rules);
-  await chrome.action.setBadgeBackgroundColor({ color: ok ? "#d9480f" : "#c92a2a" });
+  await chrome.action.setBadgeBackgroundColor({ color: ok ? "#c2410c" : "#c92a2a" });
   await chrome.action.setBadgeText({ text: ok ? String(rules.length) : "!" });
   return { ok, active: rules.length };
 }
@@ -96,7 +98,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Optioneel (alleen na toestemming voor alle sites): IP van de hoofdpagina per tab bewaren
 // en tabs met een override markeren met TEST.
 // Klein TEST-label onderin de pagina zelf, zodat je nooit vergeet dat je op de testserver zit.
-function pill(ip) {
+function pill(ip, title) {
   const ID = "host-override-pill";
   if (document.getElementById(ID)) { document.getElementById(ID).shadowRoot.querySelector("span").textContent = "TEST " + ip; return; }
   const host = document.createElement("div");
@@ -104,8 +106,8 @@ function pill(ip) {
   const root = host.attachShadow({ mode: "closed" });
   const s = document.createElement("span");
   s.textContent = "TEST " + ip;
-  s.title = "Host Override: deze pagina komt van de testserver. Klik om te verbergen.";
-  s.style.cssText = "all:initial;position:fixed;left:10px;bottom:10px;z-index:2147483647;background:#d9480f;color:#fff;font:600 12px system-ui,sans-serif;padding:4px 10px;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.35);cursor:pointer;opacity:.92";
+  s.title = title;
+  s.style.cssText = "all:initial;position:fixed;left:10px;bottom:10px;z-index:2147483647;background:#c2410c;color:#fff;font:600 12px system-ui,sans-serif;padding:4px 10px;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.35);cursor:pointer;opacity:.92";
   s.onclick = () => host.remove();
   root.append(s);
   document.documentElement.append(host);
@@ -117,11 +119,11 @@ async function onCompleted(d) {
   await chrome.storage.session.set({ [`tab:${d.tabId}`]: { host, ip: d.ip || null } });
   const rule = matchRule(activeRules(await getState()), host);
   if (rule) {
-    chrome.action.setBadgeBackgroundColor({ color: "#d9480f", tabId: d.tabId });
+    chrome.action.setBadgeBackgroundColor({ color: "#c2410c", tabId: d.tabId });
     chrome.action.setBadgeText({ text: "TEST", tabId: d.tabId });
     const { pageBadge = true } = await chrome.storage.local.get("pageBadge");
     if (pageBadge) {
-      try { await chrome.scripting.executeScript({ target: { tabId: d.tabId }, func: pill, args: [rule.ip] }); } catch { /* pagina niet toegankelijk */ }
+      try { await chrome.scripting.executeScript({ target: { tabId: d.tabId }, func: pill, args: [rule.ip, chrome.i18n.getMessage("pillTitle")] }); } catch { /* pagina niet toegankelijk */ }
     }
   }
 }

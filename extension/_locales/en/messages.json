@@ -4,5 +4,11 @@
   },
   "extDesc": {
     "message": "Test a site on another server (IP) in your normal Chrome while incognito keeps showing the live site. Includes a DNS check."
+  },
+  "pillTitle": {
+    "message": "Host Override: this page comes from the test server. Click to hide."
+  },
+  "cmdToggle": {
+    "message": "Turn Host Override on or off"
   }
 }
