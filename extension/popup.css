@@ -317,3 +317,16 @@ table.mig tr.still td { background: var(--warnbg); }
 /* Migratie-check: kopnamen als X-Content-Type-Options niet midden in het woord afbreken. */
 table.mig tbody th { white-space: nowrap; font-size: 10.5px; }
 .crow .b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Helper installeren: download + koppelcode, Node.js als geavanceerde optie */
+.hsteps li { margin: 3px 0; }
+.hdlalt { margin-left: 6px; }
+.hdlalt:empty { display: none; }
+#hDl { font-weight: 600; }
+.hpair { display: flex; gap: 6px; margin: 6px 0 2px; grid-template-columns: none; align-items: center; flex-wrap: wrap; }
+.hpair input { width: 96px; font: 600 15px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-align: center; }
+.hpair .primary { grid-column: auto; padding: 6px 12px; }
+.hpairmsg { font-size: 12px; min-height: 16px; }
+.hpairmsg.bad { color: var(--bad-fg); } .hpairmsg.ok { color: var(--ok-fg); }
+.hadv { margin: 6px 0; font-size: 12px; } .hadv > summary { cursor: pointer; color: var(--muted); }
+#hUnsigned:not(:empty) { display: block; margin-top: 2px; }

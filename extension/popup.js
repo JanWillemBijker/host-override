@@ -1,7 +1,9 @@
 import {
   activeRules, matchRule, isHost, isIp, formatHosts, parseHosts,
   OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch, STATE_KEYS,
+  detectArch, helperUrl, helperAsset, HELPER_SIGNED, pairHelper,
 } from "./common.js";
+import { openText, unsignedText, pairError } from "./helpertext.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
   DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, buildBackup, readBackup, backupPreview, applyBackup, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
@@ -75,6 +77,16 @@ function showHelperCard(kind) {
   const win = os === "win" || os === "winps";
   $("termName").textContent = win ? "PowerShell" : "Terminal";
   $("pasteKey").textContent = os === "mac" ? "Cmd+V" : "Ctrl+V";
+  // Download van de helper (alleen een link) en hoe je hem opent.
+  $("hDl").href = helperUrl(os, arch);
+  $("hDl").textContent = os === "mac" ? (arch === "x64" ? t("Download de helper (Mac met Intel)") : t("Download de helper (Mac met Apple silicon)"))
+    : win ? t("Download de helper voor Windows") : t("Download de helper voor Linux");
+  const alt = os === "mac" ? (arch === "x64" ? "arm64" : "x64") : null;
+  $("hDlAlt").href = alt ? helperUrl("mac", alt) : "#";
+  $("hDlAlt").textContent = alt ? (alt === "x64" ? t("of Intel") : t("of Apple silicon")) : "";
+  $("hOpen").textContent = openText(os, helperAsset(os, arch), t);
+  $("hUnsigned").textContent = unsignedText(os, HELPER_SIGNED, t);
+  $("hAdv").open = kind === "outdated";
   if (kind === "missing") {
     $("hbarText").textContent = t("Helper niet gekoppeld");
     $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Koppel helper");
@@ -84,16 +96,27 @@ function showHelperCard(kind) {
     $("hbarText").textContent = t("Helper moet opnieuw worden ingesteld");
     $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Stel helper in");
     $("helperTitle").textContent = t("Helper moet opnieuw worden ingesteld");
-    $("helperText").textContent = t("De helper herkent deze extensie niet (de geheime sleutel ontbreekt of klopt niet). Plak het setup-commando hieronder nog één keer. Blijft deze melding, dan gebruikt een ander programma poort 8899.");
+    $("helperText").textContent = t("De helper herkent deze extensie niet (de geheime sleutel ontbreekt of klopt niet). Open de gedownloade helper opnieuw en typ de nieuwe koppelcode, of plak het Node.js-commando nog één keer. Blijft deze melding, dan gebruikt een ander programma poort 8899.");
   } else {
     $("hbarText").textContent = t("Helper-update beschikbaar");
     $("hbarBtn").textContent = helperOpen ? t("Sluiten") : t("Update helper");
     $("helperTitle").textContent = t("Helper-update beschikbaar");
-    $("helperText").textContent = t("Deze versie van de extensie beveiligt de helper met een geheime sleutel. Kopieer het setup-commando hieronder en plak het nog één keer in je terminal. Tot dan staan je regels op pauze.");
+    $("helperText").textContent = t("Deze versie van de extensie beveiligt de helper met een geheime sleutel. Download de nieuwe helper, of kopieer het Node.js-commando hieronder en plak het nog één keer in je terminal. Tot dan staan je regels op pauze.");
   }
   $("hbarBtn").setAttribute("aria-expanded", String(helperOpen));
 }
 $("hbarBtn").onclick = () => { helperOpen = !helperOpen; showHelperCard(helperKind); };
+const arch = await detectArch();
+$("hPair").onsubmit = async (e) => {
+  e.preventDefault();
+  const msg = $("hPairMsg");
+  msg.className = "hpairmsg";
+  msg.textContent = t("Koppelen...");
+  const r = await pairHelper($("hCode").value);
+  msg.className = "hpairmsg " + (r.ok ? "ok" : "bad");
+  msg.textContent = r.ok ? t("Gekoppeld. De helper zet zich nu klaar om automatisch te starten.") : pairError(r, t);
+  if (r.ok) { $("hCode").value = ""; setTimeout(() => render(), 2500); }
+};
 
 // --- Status ---
 async function refreshStatus(state) {
@@ -118,8 +141,8 @@ async function refreshStatus(state) {
     setStatus("bad", t("De helper weigert de regels"));
     const hostTargets = activeRules(state).some((r) => isTargetHost(r.ip));
     showHelp(hostTargets && !s.features.includes("targets")
-      ? t("Een regel heeft een hostnaam als doel. Deze helper kent dat nog niet: plak het setup-commando opnieuw om hem bij te werken.")
-      : t("Plak het setup-commando opnieuw. Tot dan gaan de domeinen op je lijst nergens heen."));
+      ? t("Een regel heeft een hostnaam als doel. Deze helper kent dat nog niet: werk hem bij (nieuwe download of het Node.js-commando).")
+      : t("Koppel de helper opnieuw (open de helper voor een nieuwe code, of plak het Node.js-commando). Tot dan gaan de domeinen op je lijst nergens heen."));
   }
   else setStatus("ok", s.active === 1 ? t("Actief voor 1 regel") : t("Actief voor {n} regels", { n: s.active }));
 }

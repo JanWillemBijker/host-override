@@ -20,18 +20,34 @@
     <div class="num">1</div>
     <div class="body">
       <h2>Installeer de helper <span class="once">(eenmalig)</span></h2>
-      <p>Chrome mag zelf geen IP-adressen koppelen. Een klein programma op je eigen computer doet dat. Het is alleen bereikbaar vanaf deze computer, accepteert alleen opdrachten van deze extensie en verstuurt geen gegevens naar de maker of derden.</p>
-      <p class="need" data-th>Je hebt <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a> nodig.</p>
+      <p>Chrome mag zelf geen IP-adressen koppelen. Een klein programma op je eigen computer doet dat. Het is alleen bereikbaar vanaf deze computer, accepteert alleen opdrachten van deze extensie en verstuurt geen gegevens naar de maker of derden. De extensie downloadt of start zelf niets: jij downloadt en opent de helper.</p>
       <label class="lbl">Jouw systeem
         <select id="os"></select>
       </label>
-      <ol>
-        <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
-        <li><span data-th>Open <b id="term">Terminal</b>.</span> <span id="termHint" class="hint"></span></li>
-        <li data-th>Plak met <b id="paste">Cmd+V</b> en druk op Enter.</li>
+      <ol class="steps">
+        <li><span data-th><b>Download de helper</b> (geen Node.js nodig):</span>
+          <div class="dlrow"><a id="dl" class="btn primary" href="#" rel="noopener">Download</a> <a id="dlAlt" class="small" href="#" rel="noopener"></a></div>
+        </li>
+        <li><span id="openText"></span> <span id="unsignedText" class="hint"></span></li>
+        <li><span data-th>Er verschijnt een venster met een <b>koppelcode van 6 cijfers</b>. Typ die hier:</span>
+          <form id="pairForm" class="pair">
+            <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" aria-label="Koppelcode" spellcheck="false">
+            <button class="primary">Koppel</button>
+          </form>
+          <div id="pairMsg" class="pairmsg" role="status"></div>
+        </li>
       </ol>
-      <button id="copy" class="primary">Kopieer setup-commando</button>
-      <details><summary>Toon het commando</summary><textarea id="cmd" readonly rows="8" spellcheck="false"></textarea></details>
+      <p class="need"><span data-th>De helper draait daarna op de achtergrond en start automatisch bij inloggen. Controleren kan met <a id="sums" href="#" rel="noopener">SHA256SUMS</a>.</span></p>
+      <details class="adv"><summary>Geavanceerd: met Node.js</summary>
+        <p data-th>Heb je <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a>? Dan kun je de helper ook vanuit de broncode in deze extensie installeren, zonder download.</p>
+        <ol>
+          <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
+          <li><span data-th>Open <b id="term">Terminal</b>.</span> <span id="termHint" class="hint"></span></li>
+          <li data-th>Plak met <b id="paste">Cmd+V</b> en druk op Enter.</li>
+        </ol>
+        <button id="copy" class="secondary">Kopieer setup-commando</button>
+        <details><summary>Toon het commando</summary><textarea id="cmd" readonly rows="8" spellcheck="false"></textarea></details>
+      </details>
       <div id="state" class="state wait"><span class="dot"></span><span id="stateText">Wachten op de helper...</span></div>
     </div>
   </section>

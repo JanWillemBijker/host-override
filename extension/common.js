@@ -49,7 +49,50 @@ export async function helperStatus() {
   }
   // features: uitbreidingen binnen protocol 6 (oudere v6-helpers sturen dit niet mee).
   const features = Array.isArray(json?.features) ? json.features.filter((f) => typeof f === "string").slice(0, 30) : [];
-  return { reachable: true, version, configured, verified, features };
+  return { reachable: true, version, configured, verified, features, pairing: json?.pairing === true, kind: json?.kind === "bin" ? "bin" : "node" };
+}
+
+// ---------- Helper als losse download (geen Node.js nodig) ----------
+// De extensie linkt alleen naar de download; ze downloadt of start zelf nooit iets.
+export const HELPER_RELEASES = "https://github.com/JanWillemBijker/host-override/releases/latest/download/";
+// Zet op true zodra de binaries voor dat platform ondertekend (en voor macOS genotariseerd) zijn; dan verdwijnt
+// de uitleg over "Toch openen" / "Toch uitvoeren". Zie store/SIGNING.md.
+export const HELPER_SIGNED = { mac: false, win: false };
+
+// "arm64" of "x64" (alleen relevant voor macOS). Chrome op Apple silicon meldt architecture "arm".
+export async function detectArch() {
+  try {
+    const v = await navigator.userAgentData?.getHighEntropyValues?.(["architecture"]);
+    if (v?.architecture) return v.architecture === "arm" ? "arm64" : "x64";
+  } catch { /* geen client hints */ }
+  return "arm64"; // macOS: vrijwel alle nieuwe Macs; de andere link staat er ook bij
+}
+export function helperAsset(os, arch = "arm64") {
+  if (os === "mac") return `host-override-helper-macos-${arch === "x64" ? "x64" : "arm64"}.zip`;
+  if (os === "win" || os === "winps") return "host-override-helper-windows-x64.exe";
+  return "host-override-helper-linux-x64.tar.gz";
+}
+export const helperUrl = (os, arch) => HELPER_RELEASES + helperAsset(os, arch);
+
+// Koppelen: de gebruiker typt de 6-cijferige code die de helper toont. Alleen als de helper op 127.0.0.1:8899
+// zegt dat er een koppelvenster open staat. Het extensie-ID gaat mee als Origin (zet Chrome zelf).
+// Uitkomst: { ok } of { ok: false, error: "missing" | "no-pairing" | "code" | "format" | ..., left }
+export async function pairHelper(code) {
+  code = String(code || "").replace(/\D/g, "");
+  if (code.length !== 6) return { ok: false, error: "format" };
+  const st = await helperStatus();
+  if (!st.reachable) return { ok: false, error: "missing" };
+  if (!st.pairing) return { ok: false, error: "no-pairing" };
+  try {
+    const res = await fetch(`${HELPER_BASE}/__pair`, {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Host-Override": "1" },
+      body: JSON.stringify({ code, secret: await getSecret() }),
+    });
+    const j = await res.json().catch(() => ({}));
+    forgetHelper();
+    return res.ok ? { ok: true } : { ok: false, error: j.error || String(res.status), left: j.left };
+  } catch (e) { return { ok: false, error: "missing" }; }
 }
 
 // Korte cache per pagina/achtergrond, zodat niet elke DNS-vraag eerst een status-check doet.

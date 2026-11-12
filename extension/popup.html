@@ -34,16 +34,27 @@
     <div id="helper" class="card warn" hidden>
       <strong id="helperTitle"></strong>
       <p id="helperText"></p>
-      <ol>
-        <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
-        <li>Open <b id="termName">Terminal</b>, plak (<span id="pasteKey">Cmd+V</span>) en druk op Enter.</li>
-        <li data-th>Kom terug en klik op <b>Opnieuw controleren</b>.</li>
+      <ol class="hsteps">
+        <li><a id="hDl" href="#" target="_blank" rel="noopener">Download de helper</a> <span class="small">(geen Node.js nodig)</span><a id="hDlAlt" class="small hdlalt" href="#" target="_blank" rel="noopener"></a></li>
+        <li><span id="hOpen"></span> <span id="hUnsigned" class="small"></span></li>
+        <li data-th>Typ de <b>koppelcode</b> (6 cijfers) uit dat venster:</li>
       </ol>
-      <div class="row">
-        <button id="copySetup" class="primary">Kopieer setup-commando</button>
-        <button id="recheck" class="secondary">Opnieuw controleren</button>
-      </div>
-      <p class="small" data-th>Vereist <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a>. Eenmalig per computer. <a href="welcome.html" target="_blank">Uitgebreide uitleg</a>. Zonder helper kun je wel het commando voor een testvenster kopiëren (tab Meer).</p>
+      <form id="hPair" class="hpair">
+        <input id="hCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" spellcheck="false" aria-label="Koppelcode">
+        <button class="primary">Koppel</button>
+        <button id="recheck" type="button" class="secondary">Opnieuw controleren</button>
+      </form>
+      <div id="hPairMsg" class="hpairmsg" role="status"></div>
+      <details id="hAdv" class="hadv"><summary>Geavanceerd: met Node.js</summary>
+        <ol>
+          <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
+          <li>Open <b id="termName">Terminal</b>, plak (<span id="pasteKey">Cmd+V</span>) en druk op Enter.</li>
+          <li data-th>Kom terug en klik op <b>Opnieuw controleren</b>.</li>
+        </ol>
+        <div class="row"><button id="copySetup" class="secondary">Kopieer setup-commando</button></div>
+        <p class="small" data-th>Vereist <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a>; installeert de helper uit de broncode in deze extensie.</p>
+      </details>
+      <p class="small" data-th>Eenmalig per computer. De extensie downloadt of start zelf niets. <a href="welcome.html" target="_blank">Uitgebreide uitleg</a>. Zonder helper kun je wel het commando voor een testvenster kopiëren (tab Meer).</p>
     </div>
 
     <div id="status" class="status" role="status"><span class="dot"></span><span id="statusText"></span></div>

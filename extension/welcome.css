@@ -32,3 +32,20 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 .credit a { color: var(--muted); font-weight: 600; text-decoration: none; }
 .credit a:hover { color: var(--link); text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { .state.wait .dot { animation: none; } }
+.steps > li { margin: 8px 0; }
+.dlrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 2px; }
+a.btn { display: inline-block; text-decoration: none; background: var(--accent); color: #fff; border-radius: 8px; padding: 9px 16px; font-weight: 600; }
+a.btn:hover { filter: brightness(1.08); }
+.small { font-size: 13px; color: var(--muted); }
+.pair { display: flex; gap: 8px; margin: 6px 0 2px; }
+.pair input { width: 130px; padding: 8px 10px; font: 600 18px ui-monospace, Menlo, monospace; letter-spacing: .12em; background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
+.pair input:focus { outline: 2px solid var(--link); outline-offset: 1px; }
+.pairmsg { font-size: 14px; min-height: 20px; }
+.pairmsg.bad { color: #c92a2a; } .pairmsg.ok { color: var(--ok); }
+@media (prefers-color-scheme: dark) { .pairmsg.bad { color: #ff8787; } }
+button.secondary { background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+button.secondary:hover { border-color: var(--accent); }
+details.adv { margin-top: 14px; color: var(--fg); font-size: 15px; }
+details.adv > summary { color: var(--muted); font-size: 14px; }
+input:focus-visible, a.btn:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+#unsignedText:not(:empty) { display: block; margin-top: 4px; font-size: 14px; }
