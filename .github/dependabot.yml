@@ -1,0 +1,10 @@
+# Houdt de op SHA vastgezette GitHub Actions bij (Dependabot zet de SHA en het versiecommentaar samen om).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

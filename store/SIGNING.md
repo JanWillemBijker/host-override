@@ -87,7 +87,11 @@ Advies: **Azure Artifact Signing** als je in aanmerking komt (goedkoop, geen tok
 2. *Identity validation* (organisatie of individu) aanvragen en wachten op goedkeuring.
 3. *Certificate profile* "Public Trust" aanmaken.
 4. App-registratie (service principal) maken en die de rol **Artifact Signing Certificate Profile Signer** geven
-   op het account.
+   op het account (of alleen op het certificaatprofiel). Voor CI **geen clientgeheim** aanmaken maar een
+   **federated credential** (OIDC): Entra ID > App-registraties > de app > Certificaten en geheimen > Federatieve
+   referenties > *GitHub Actions*: organisatie `JanWillemBijker`, repository `host-override`, entiteit *Tag*
+   met patroon `v*` (of *Environment* als je een GitHub-environment gebruikt). Dan krijgt alleen een workflow-run
+   voor een tag in deze repository een kortlevend token; er staat geen langlevend geheim in GitHub.
 5. Lokaal op Windows: Windows SDK (signtool) + de *Artifact Signing Client Tools* installeren, en een
    `metadata.json` maken met `Endpoint`, `CodeSigningAccountName`, `CertificateProfileName`. Dan:
    ```
@@ -96,7 +100,8 @@ Advies: **Azure Artifact Signing** als je in aanmerking komt (goedkoop, geen tok
    bash build-helper.sh --targets windows-x64
    ```
    (inloggen via `az login` of de omgevingsvariabelen `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`).
-6. In CI gebruikt de workflow de officiële action `azure/artifact-signing-action` (zie hieronder).
+6. In CI logt de workflow in met `azure/login` via OIDC (`permissions: id-token: write`, alleen in de
+   Windows-job) en ondertekent met de officiële action `azure/artifact-signing-action` (zie hieronder).
 
 ### OV/EV-certificaat
 - Op een USB-token of in de Windows-certstore: `WIN_CERT_SHA1=<thumbprint>` en bouwen op Windows (signtool).
@@ -142,10 +147,17 @@ secrets bestaan (Settings > Secrets and variables > Actions):
 
 - macOS: `APPLE_CERT_P12_BASE64` (exporteer het Developer ID-certificaat mét sleutel als .p12 uit Sleutelhangertoegang,
   dan `base64 -i cert.p12 | pbcopy`), `APPLE_CERT_PASSWORD`, `APPLE_DEV_ID`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_APP_PASSWORD`.
-- Windows met Azure: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`,
-  `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`. Controleer bij de eerste run de actuele versie en inputs van
-  `azure/artifact-signing-action`.
+- Windows met Azure (OIDC, geen clientgeheim): `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`,
+  `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` (ID's zijn geen geheimen, maar zo staan
+  ze bij elkaar). Plus de federated credential uit stap 4 hierboven.
 - Windows met .pfx: `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD`.
+
+Beveiliging van de workflow: alle actions staan vast op een volledige commit-SHA met de versie als commentaar
+(`uses: owner/action@<sha> # vX.Y.Z`); `.github/dependabot.yml` stelt wekelijks updates voor. Rechten staan
+standaard op niets (`permissions: {}`); de bouwjobs krijgen `contents: read`, de Windows-job daarnaast
+`id-token: write` voor OIDC, en alleen de release-job `contents: write`. Checkout bewaart geen git-token
+(`persist-credentials: false`). Het Apple-certificaat staat alleen tijdens de run in een tijdelijke sleutelhanger.
+Overweeg de signing-secrets in een GitHub-*environment* met verplichte goedkeuring te zetten.
 
 De downloadlinks in de extensie wijzen naar `HELPER_RELEASES` in `extension/common.js`
 (`https://github.com/JanWillemBijker/host-override/releases/latest/download/`). Pas die ene constante aan als de
