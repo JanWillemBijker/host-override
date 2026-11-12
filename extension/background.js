@@ -227,7 +227,7 @@ async function evaluate(tabId, host, ip) {
     const hostsHit = hosts && hosts.some((e) => e.kind !== "blocked");
     const { master, ind } = await indicatorSettings();
     // Publieke DNS alleen automatisch als de gebruiker "wijkt af van publieke DNS" heeft aangezet
-    // (dan gaat elke bezochte hostnaam naar Cloudflare; dat staat bij de instelling).
+    // (dan gaat elke bezochte hostnaam naar de gekozen DNS-dienst, standaard Cloudflare; dat staat bij de instelling).
     if (!hostsHit && ip && master && ind.onDiffers) {
       try { doh = await dohLookup(host); } catch { doh = null; }
     } else if (!hostsHit && ip) {

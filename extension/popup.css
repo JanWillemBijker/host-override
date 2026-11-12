@@ -276,3 +276,5 @@ input[type=password] { background: var(--field); color: var(--fg); border: 1px s
 .subItem select { width: auto; margin: 0; }
 .subUrl { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bad-fg { color: var(--bad-fg); }
+.bklist { margin: 6px 0; padding-left: 18px; }
+body.tabmode { margin: 0 auto; }

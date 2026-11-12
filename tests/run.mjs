@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = path.join(ROOT, "extension");
 const require = createRequire(import.meta.url);
 const tools = require(path.join(EXT, "helper", "dnstools.js"));
-const { classify, normIp, sameNet, triggers } = await import(path.join(EXT, "detect.js"));
+const { classify, normIp, sameNet, triggers, dnsWireQuery, parseDnsWire } = await import(path.join(EXT, "detect.js"));
 const { normIndicator, renderLabel, textColor, INDICATOR_DEFAULTS } = await import(path.join(EXT, "indicator.js"));
 const M = await import(path.join(EXT, "model.js"));
 const { fetchSubList } = await import(path.join(EXT, "subs.js"));
@@ -334,6 +334,18 @@ await test("back-up: geheim en wachtwoorden alleen als aangevinkt; voorbeeld; sa
   for (const bad of ["{", "[]", JSON.stringify({ kind: "x", v: 1, data: {} }), "x".repeat(6 * 1024 * 1024)]) assert.throws(() => M.readBackup(bad));
   const evil = M.readBackup(JSON.stringify({ kind: M.BACKUP_KIND, v: 1, data: { rules: [{ host: "a.nl;rm", ip: "1.1.1.1" }, { host: "ok.nl", ip: "$(id)" }], groups: [{ id: "../x", color: "red" }], settings: { helperSecret: "x", evil: 1 } }, secret: "nope" }));
   assert.equal(evil.state.rules.length, 0); assert.equal(evil.secret, null); assert.deepEqual(Object.keys(evil.settings), []);
+});
+
+await test("DoH wire-formaat (Quad9): query en antwoord met compressie, A en AAAA", () => {
+  const q = Buffer.from(dnsWireQuery("example.com", "AAAA").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  assert.equal(q.readUInt16BE(0), 0); assert.equal(q.readUInt16BE(4), 1); assert.equal(q.readUInt16BE(q.length - 4), 28);
+  const ans = Buffer.concat([Buffer.from([0, 0, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0]), q.subarray(12),
+    Buffer.from([0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 215, 14]),
+    Buffer.from([0xc0, 12, 0, 28, 0, 1, 0, 0, 1, 0, 0, 16, 0x26, 0x06, 0x28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])]);
+  const r = parseDnsWire(new Uint8Array(ans));
+  assert.deepEqual(r.Answer.map((a) => [a.type, a.TTL, normIp(a.data)]), [[1, 60, "93.184.215.14"], [28, 256, "2606:2800::1"]]);
+  assert.throws(() => parseDnsWire(new Uint8Array([1, 2, 3])));
+  assert.throws(() => dnsWireQuery("a..b", "A"));
 });
 
 console.log("Verzoek-headers per groep (declarativeNetRequest)");

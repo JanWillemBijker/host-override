@@ -4,10 +4,10 @@ import {
 } from "./common.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
-  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, buildBackup, readBackup, backupPreview, applyBackup, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
 } from "./model.js";
 import { initI18n, t } from "./i18n.js";
-import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
+import { classify, dohLookup, hostsLookup, hostsOverview, dohProvider, DOH_PROVIDERS } from "./detect.js";
 import { COLORS, INDICATOR_DEFAULTS, normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
 
 const langPref = await initI18n();
@@ -963,6 +963,91 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.syncStatus || changes.subs)) render(false);
 });
 
+// --- Publieke DNS kiezen ---
+async function renderDoh() {
+  const p = await dohProvider();
+  $("dohSel").value = p;
+  $("dohNote").textContent = p === "helper"
+    ? t("Vraagt de DNS-server van je systeem rechtstreeks (via de helper): geen externe dienst, maar een router of bedrijfs-DNS kan een ander antwoord geven dan de rest van internet.")
+    : t("Alleen bij \"Opzoeken\" (en bij de optie \"wijkt af van publieke DNS\") gaat de hostnaam naar {p}.", { p: DOH_PROVIDERS[p].label });
+}
+renderHooks.push(() => { if (!$("viewMore").hidden) renderDoh(); });
+$("dohSel").onchange = async () => {
+  const v = $("dohSel").value;
+  const P = DOH_PROVIDERS[v];
+  // Google en Quad9: eenmalig toegang tot dat ene domein (moet vanuit deze keuze, een gebruikersactie).
+  if (P?.origin && !(await chrome.permissions.contains({ origins: [P.origin] })) && !(await chrome.permissions.request({ origins: [P.origin] }))) {
+    renderDoh();
+    return;
+  }
+  await chrome.storage.local.set({ dohProvider: v });
+  // Oude antwoorden van een andere dienst vergeten.
+  const all = await chrome.storage.session.get(null);
+  await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith("doh:")));
+  renderDoh();
+};
+
+// --- Back-up (JSON) ---
+$("bkExport").onclick = async () => {
+  const raw = await chrome.storage.local.get(null);
+  const data = buildBackup(raw, { includeSecrets: $("bkSecrets").checked, version: chrome.runtime.getManifest().version });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: `host-override-backup-${new Date().toISOString().slice(0, 10)}.json` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  $("bkMsg").textContent = $("bkSecrets").checked ? t("Back-up gemaakt, inclusief geheimen. Bewaar dit bestand veilig.") : t("Back-up gemaakt (zonder helper-sleutel en wachtwoorden).");
+};
+$("bkImport").onclick = async () => {
+  // In de popup sluit Chrome het venster zodra de bestandskiezer opent: dan in een tab openen.
+  const inTab = !!(await chrome.tabs.getCurrent?.());
+  if (!sideMode && !inTab) { chrome.tabs.create({ url: chrome.runtime.getURL("popup.html#more-import") }); window.close(); return; }
+  $("bkFile").click();
+};
+$("bkFile").onchange = async () => {
+  const f = $("bkFile").files[0];
+  $("bkFile").value = "";
+  if (!f) return;
+  $("bkMsg").textContent = "";
+  let b;
+  try {
+    if (f.size > 5 * 1024 * 1024) throw new Error("too-big");
+    b = readBackup(await f.text());
+  } catch (e) {
+    $("bkPreview").hidden = true;
+    $("bkMsg").textContent = { "too-big": t("Bestand is te groot (max 5 MB)."), "not-json": t("Geen geldig JSON-bestand."), "not-backup": t("Dit is geen back-up van Host Override.") }[e.message] || e.message;
+    return;
+  }
+  const pv = backupPreview(await chrome.storage.local.get(null), b);
+  const box = $("bkPreview");
+  const secret = h("input", { type: "checkbox" });
+  const merge = h("button", { class: "primary mini-primary", type: "button" }, t("Samenvoegen"));
+  const replace = h("button", { class: "secondary danger", type: "button" }, t("Alles vervangen"));
+  const cancel = h("button", { class: "secondary", type: "button" }, t("Annuleren"));
+  box.replaceChildren(
+    h("strong", {}, t("Back-up van {date}", { date: b.exported ? new Date(b.exported).toLocaleString() : "?" })),
+    h("ul", { class: "bklist" },
+      h("li", {}, t("{n} regels: {a} nieuw, {c} gewijzigd, {s} gelijk", { n: pv.rules, a: pv.added, c: pv.changed, s: pv.same })),
+      h("li", {}, t("{n} groepen ({g} nieuw), {s} abonnement(en), {k} instelling(en)", { n: pv.groups, g: pv.newGroups, s: pv.subs, k: pv.settings })),
+      pv.removed ? h("li", {}, t("Bij \"Alles vervangen\" verdwijnen {n} regel(s) die niet in de back-up staan.", { n: pv.removed })) : null),
+    pv.secret ? h("label", { class: "check" }, secret, t("Helper-sleutel uit de back-up herstellen (alleen als de helper op deze computer met die sleutel is ingesteld)")) : null,
+    h("div", { class: "row wrap" }, merge, replace, cancel));
+  box.hidden = false;
+  const doIt = async (mode) => {
+    const raw = await chrome.storage.local.get(null);
+    const next = applyBackup(raw, b, mode);
+    if (pv.secret && secret.checked) next.helperSecret = b.secret;
+    await chrome.storage.local.set(next);
+    box.hidden = true;
+    $("bkMsg").textContent = mode === "merge" ? t("Back-up samengevoegd.") : t("Back-up teruggezet.");
+    await chrome.runtime.sendMessage("status");
+    render();
+  };
+  merge.onclick = () => doIt("merge");
+  replace.onclick = () => doIt("replace");
+  cancel.onclick = () => { box.hidden = true; };
+};
+
 // --- Taal ---
 $("langSel").value = langPref;
 $("langSel").onchange = async () => {
@@ -1105,3 +1190,9 @@ groupEditorExtras.push((g, state) => {
 
 tab = await getTab();
 render();
+// popup.html#more (of #more-import vanuit de popup): direct naar Meer, eventueel met de bestandskiezer.
+if (location.hash.startsWith("#more")) {
+  document.body.classList.add("tabmode");
+  showView("more");
+  if (location.hash === "#more-import") setTimeout(() => $("backupCard").scrollIntoView(), 300);
+}

@@ -62,7 +62,7 @@
         <span class="label">Live IP</span>
         <code id="liveIp">-</code>
         <button id="copyIp" class="mini" title="Kopieer IP" hidden>Kopieer</button>
-        <button id="lookupBtn" class="mini" title="Vraagt het live IP op via Cloudflare DNS-over-HTTPS (stuurt de hostnaam naar Cloudflare)">Opzoeken</button>
+        <button id="lookupBtn" class="mini" title="Vraagt het live IP op bij publieke DNS (standaard Cloudflare, instelbaar onder Meer; stuurt de hostnaam naar die dienst)">Opzoeken</button>
       </div>
       <div id="srcNote" class="srcNote" hidden></div>
       <div id="dnsOut" class="small"></div>
@@ -149,6 +149,15 @@
       </label>
       <label class="check"><input type="checkbox" id="autoReload"> Tab automatisch herladen na een wijziging</label>
       <label class="check"><input type="checkbox" id="exclusive"> Maar één groep tegelijk actief</label>
+      <label class="field">Publieke DNS voor het live IP
+        <select id="dohSel" aria-label="Publieke DNS voor het live IP">
+          <option value="cloudflare">Cloudflare (standaard)</option>
+          <option value="google">Google Public DNS</option>
+          <option value="quad9">Quad9</option>
+          <option value="helper">Via de helper (DNS-server van je systeem)</option>
+        </select>
+      </label>
+      <p id="dohNote" class="small"></p>
       <label class="check"><input type="checkbox" id="sideDefault"> Open altijd als zijpaneel</label>
       <p class="small" data-th>Sneltoets: Alt+Shift+H zet alles aan of uit. <a href="welcome.html" target="_blank">Installatie-uitleg</a></p>
     </section>
@@ -165,7 +174,7 @@
         <label class="check"><input type="checkbox" id="indOnRule"> Via een Host Override-regel</label>
         <label class="check"><input type="checkbox" id="indOnHosts"> Via je hosts-bestand (vereist de helper)</label>
         <label class="check"><input type="checkbox" id="indOnDiffers"> Als het IP afwijkt van publieke DNS</label>
-        <p class="small indent">Stuurt dan de hostnaam van elke pagina die je opent naar Cloudflare DNS. Kan vals alarm geven bij CDN's, VPN of een proxy; afwijkingen binnen hetzelfde netwerkblok worden genegeerd.</p>
+        <p class="small indent">Stuurt dan de hostnaam van elke pagina die je opent naar de gekozen DNS-dienst (standaard Cloudflare). Kan vals alarm geven bij CDN's, VPN of een proxy; afwijkingen binnen hetzelfde netwerkblok worden genegeerd.</p>
         <div class="grid2">
           <label class="field">Stijl
             <select id="indStyle">
@@ -251,6 +260,20 @@
       <p id="syncState" class="small" role="status"></p>
       <div class="row"><button id="syncNow" class="secondary">Nu synchroniseren</button></div>
       <p class="small">Via de sync-opslag van Chrome (je Google-account, als Chrome-synchronisatie aan staat). Gaat mee: eigen regels, groepen, notities, abonnementen (alleen de URL) en instellingen. Gaat nooit mee: de helper-sleutel, Basic-auth-wachtwoorden en de aan/uit-schakelaar. Maximaal ongeveer 90 KB. Bij de eerste keer aanzetten worden beide kanten samengevoegd.</p>
+    </section>
+
+    <section id="backupCard" class="card">
+      <span class="label">Back-up</span>
+      <p class="small">Alles in één JSON-bestand: regels, groepen, notities, abonnementen (URL) en instellingen.</p>
+      <label class="check"><input type="checkbox" id="bkSecrets"> Ook de helper-sleutel en Basic-auth-wachtwoorden opnemen</label>
+      <p class="small indent">Alleen voor een back-up die je veilig bewaart: met de sleutel kan een programma op je computer je helper aansturen.</p>
+      <div class="row wrap">
+        <button id="bkExport" class="secondary">Exporteren (JSON)</button>
+        <button id="bkImport" class="secondary">Importeren...</button>
+        <input type="file" id="bkFile" accept=".json,application/json" hidden>
+      </div>
+      <div id="bkPreview" class="help" hidden></div>
+      <div id="bkMsg" class="small" role="status"></div>
     </section>
 
     <section id="share" class="card">

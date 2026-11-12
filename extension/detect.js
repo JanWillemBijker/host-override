@@ -74,7 +74,64 @@ export function triggers(result, ind) {
   return false;
 }
 
-// ---------- Publieke DNS (Cloudflare DNS-over-HTTPS) ----------
+// ---------- Publieke DNS (DNS-over-HTTPS, of via de helper) ----------
+// Instelling "dohProvider": cloudflare (standaard), google, quad9 of helper (de DNS-server van je systeem,
+// rechtstreeks bevraagd door de helper; geen derde partij, maar wel je eigen/zakelijke resolver).
+// Google en Quad9 vragen eenmalig toegang tot hun domein (optionele host-permissie).
+export const DOH_PROVIDERS = {
+  cloudflare: { label: "Cloudflare", url: "https://cloudflare-dns.com/dns-query", origin: "https://cloudflare-dns.com/*" },
+  google: { label: "Google", url: "https://dns.google/resolve", origin: "https://dns.google/*" },
+  quad9: { label: "Quad9", url: "https://dns.quad9.net/dns-query", origin: "https://dns.quad9.net/*", wire: true }, // alleen RFC 8484
+  helper: { label: "helper", url: null, origin: null },
+};
+export async function dohProvider() {
+  try { const { dohProvider: p } = await chrome.storage.local.get("dohProvider"); return DOH_PROVIDERS[p] ? p : "cloudflare"; }
+  catch { return "cloudflare"; }
+}
+
+// RFC 8484 (wire-formaat) voor diensten zonder JSON-API: alleen A/AAAA, antwoord in dezelfde vorm als de JSON-API.
+export function dnsWireQuery(host, type) {
+  const bytes = [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]; // ID 0 (RFC 8484), RD, 1 vraag
+  for (const label of host.replace(/\.$/, "").split(".")) {
+    const b = new TextEncoder().encode(label);
+    if (!b.length || b.length > 63) throw new Error("ongeldige naam");
+    bytes.push(b.length, ...b);
+  }
+  bytes.push(0, 0, type === "AAAA" ? 28 : 1, 0, 1);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+export function parseDnsWire(buf) {
+  if (buf.length < 12) throw new Error("kapot DNS-antwoord");
+  const u16 = (o) => (buf[o] << 8) | buf[o + 1];
+  const skipName = (o) => {
+    for (let n = 0; n < 128; n++) {
+      const l = buf[o];
+      if (l === undefined) throw new Error("kapot DNS-antwoord");
+      if (l === 0) return o + 1;
+      if ((l & 0xc0) === 0xc0) return o + 2;
+      o += 1 + l;
+    }
+    throw new Error("kapot DNS-antwoord");
+  };
+  const status = buf[3] & 15, qd = u16(4), an = u16(6);
+  let o = 12;
+  for (let i = 0; i < qd; i++) o = skipName(o) + 4;
+  const Answer = [];
+  for (let i = 0; i < an && o < buf.length; i++) {
+    o = skipName(o);
+    const type = u16(o), TTL = ((buf[o + 4] << 24) >>> 0) + (buf[o + 5] << 16) + (buf[o + 6] << 8) + buf[o + 7], len = u16(o + 8);
+    const d = buf.subarray(o + 10, o + 10 + len);
+    if (type === 1 && len === 4) Answer.push({ type, TTL, data: [...d].join(".") });
+    else if (type === 28 && len === 16) {
+      const g = [];
+      for (let j = 0; j < 16; j += 2) g.push(((d[j] << 8) | d[j + 1]).toString(16));
+      Answer.push({ type, TTL, data: g.join(":") });
+    }
+    o += 10 + len;
+  }
+  return { Status: status, Answer };
+}
+
 // A en AAAA samen, zodat een IPv6-verbinding niet als "afwijkend" telt als alleen naar A gekeken wordt.
 // Gecachet in chrome.storage.session per hostnaam, zo lang als de TTL (min 1 min, max 1 uur).
 export async function dohLookup(host, { cache = true } = {}) {
@@ -83,8 +140,21 @@ export async function dohLookup(host, { cache = true } = {}) {
     const c = (await chrome.storage.session.get(key))[key];
     if (c && c.exp > Date.now()) return c;
   }
+  const provider = await dohProvider();
+  const P = DOH_PROVIDERS[provider];
   const ask = async (type) => {
-    const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`, { headers: { accept: "application/dns-json" } });
+    if (provider === "helper") {
+      const r = await helperFetch("/__dns", { body: { name: host, type, server: "system" } });
+      if (!r.ok) throw new Error(`helper ${r.status}`);
+      const j = await r.json();
+      return { Status: j.rcode === "NXDOMAIN" ? 3 : 0, Answer: (j.answers || []).map((a) => ({ type: a.type === "A" ? 1 : a.type === "AAAA" ? 28 : 0, data: a.data, TTL: a.ttl })) };
+    }
+    if (P.wire) {
+      const r = await fetch(`${P.url}?dns=${dnsWireQuery(host, type)}`, { headers: { accept: "application/dns-message" }, credentials: "omit", signal: AbortSignal.timeout(8000) });
+      if (!r.ok) throw new Error(`DoH ${r.status}`);
+      return parseDnsWire(new Uint8Array(await r.arrayBuffer()));
+    }
+    const r = await fetch(`${P.url}?name=${encodeURIComponent(host)}&type=${type}`, { headers: { accept: "application/dns-json" }, credentials: "omit", signal: AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error(`DoH ${r.status}`);
     return r.json();
   };
@@ -93,7 +163,7 @@ export async function dohLookup(host, { cache = true } = {}) {
   const ips = [...new Set(ans.map((x) => normIp(x.data)))];
   const status = ips.length ? "ok" : a.Status === 3 ? "nxdomain" : "nodata";
   const ttl = Math.min(3600, Math.max(60, ans.length ? Math.min(...ans.map((x) => x.TTL || 60)) : 60));
-  const out = { status, ips, exp: Date.now() + ttl * 1000 };
+  const out = { status, ips, exp: Date.now() + ttl * 1000, via: provider };
   try { await chrome.storage.session.set({ [key]: out }); } catch { /* sessie-opslag vol: niet cachen */ }
   return out;
 }
