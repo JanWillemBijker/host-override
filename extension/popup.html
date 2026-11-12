@@ -21,6 +21,7 @@
 
   <nav class="tabs" role="tablist" aria-label="Onderdelen">
     <button id="tabRules" class="tab active" role="tab" aria-selected="true" aria-controls="viewRules">Regels</button>
+    <button id="tabConn" class="tab" role="tab" aria-selected="false" aria-controls="viewConn" tabindex="-1">Verbindingen</button>
     <button id="tabDns" class="tab" role="tab" aria-selected="false" aria-controls="viewDns" tabindex="-1">DNS-check</button>
     <button id="tabMore" class="tab" role="tab" aria-selected="false" aria-controls="viewMore" tabindex="-1">Meer</button>
   </nav>
@@ -91,6 +92,26 @@
       <button class="primary">Toevoegen</button>
     </form>
     <div id="err" class="err" role="alert"></div>
+  </div>
+
+  <div id="viewConn" role="tabpanel" aria-labelledby="tabConn" hidden>
+    <div id="cPerm" class="help" hidden>
+      <span>Voor dit overzicht is toegang tot alle sites nodig (dezelfde toestemming als IP-weergave). De extensie ziet dan per verzoek alleen de hostnaam, het IP en het type (script, afbeelding...), niet de inhoud of het volledige adres. Niets verlaat je browser.</span>
+      <div class="row"><button id="cPermBtn" class="secondary">Toegang geven</button></div>
+    </div>
+    <div id="cHead" class="chead" hidden>
+      <div class="ctitle"><span id="cPage" class="siteHost"></span><span id="cSum" class="small"></span></div>
+      <div id="cTypes" class="ctypes"></div>
+      <div id="cWarn" class="cwarn" role="status" hidden></div>
+    </div>
+    <div id="cEmpty" class="empty" hidden>Nog geen verzoeken gezien voor deze tab. Ververs de pagina om alle verbindingen te zien.</div>
+    <div id="cList" class="clist"></div>
+    <div class="row wrap">
+      <button id="cReload" class="secondary">Pagina verversen</button>
+      <button id="cCopy" class="secondary">Kopieer overzicht</button>
+      <label class="check cfilter"><input type="checkbox" id="cOnlyDomain"> Alleen dit domein</label>
+    </div>
+    <p class="small">Toont alle hosts waar deze tab sinds de laatste paginaweergave iets van laadde, met IP en type. Oranje: komt nog van de live server terwijl een host van hetzelfde domein een regel heeft (bijvoorbeeld www, cdn of api vergeten). Het domein wordt bij benadering bepaald.</p>
   </div>
 
   <div id="viewDns" role="tabpanel" aria-labelledby="tabDns" hidden>

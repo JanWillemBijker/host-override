@@ -262,18 +262,78 @@ async function repaintAll() {
   }
 }
 
+// ---------- Verbindingen van de pagina ----------
+// Per tab: welke hosts (en IP's) de pagina gebruikte, met aantal verzoeken per type. Alleen hostnaam, IP,
+// type en of het lukte; geen URL's, geen inhoud. Leeg bij elke nieuwe hoofdpagina, weg bij het sluiten van de tab.
+// In het geheugen bijgehouden en per tab (vertraagd) in chrome.storage.session gezet voor de popup.
+const CONN_MAX_HOSTS = 300;
+const conns = new Map(); // tabId -> rec
+const connQueue = new Map(); // tabId -> Promise (volgorde per tab bewaren)
+const connTimers = new Map();
+function connFlush(tabId) {
+  clearTimeout(connTimers.get(tabId));
+  connTimers.set(tabId, setTimeout(() => {
+    connTimers.delete(tabId);
+    const rec = conns.get(tabId);
+    if (rec) chrome.storage.session.set({ [`conn:${tabId}`]: rec }).catch(() => { /* sessie-opslag vol */ });
+  }, 700));
+}
+function connEvent(d, kind) {
+  if (d.tabId < 0) return;
+  let host;
+  try { const u = new URL(d.url); if (!/^(https?|wss?):$/.test(u.protocol)) return; host = u.hostname.replace(/^\[|\]$/g, ""); } catch { return; }
+  if (host === "__proto__") return; // sleutel in een gewoon object
+  const tabId = d.tabId;
+  const job = (connQueue.get(tabId) || Promise.resolve()).then(async () => {
+    let rec = conns.get(tabId);
+    if (d.type === "main_frame" && kind === "start") {
+      rec = { page: host, at: Date.now(), total: 0, hosts: {} };
+      conns.set(tabId, rec);
+    }
+    if (kind === "start") { if (rec) connFlush(tabId); return; }
+    if (!rec) {
+      // Service worker was even weg: verder tellen vanaf wat er in de sessie stond.
+      rec = (await chrome.storage.session.get(`conn:${tabId}`))[`conn:${tabId}`] || { page: null, at: Date.now(), total: 0, hosts: {}, partial: true };
+      conns.set(tabId, rec);
+    }
+    let e = Object.hasOwn(rec.hosts, host) ? rec.hosts[host] : null;
+    if (!e) {
+      if (Object.keys(rec.hosts).length >= CONN_MAX_HOSTS) { rec.dropped = (rec.dropped || 0) + 1; return; }
+      e = rec.hosts[host] = { n: 0, err: 0, cache: 0, ips: [], types: {} };
+    }
+    e.n++;
+    rec.total++;
+    e.types[d.type] = (e.types[d.type] || 0) + 1;
+    if (kind === "error") e.err++;
+    if (d.fromCache) e.cache++;
+    if (d.ip && !e.ips.includes(d.ip) && e.ips.length < 6) e.ips.push(d.ip);
+    connFlush(tabId);
+  }).catch(() => {});
+  connQueue.set(tabId, job);
+}
+const connStart = (d) => connEvent(d, "start");
+const connDone = (d) => connEvent(d, "done");
+const connError = (d) => connEvent(d, "error");
+
 function registerWebRequest() {
   try {
     if (!chrome.webRequest.onCompleted.hasListener(onCompleted)) {
       chrome.webRequest.onCompleted.addListener(onCompleted, { urls: ["http://*/*", "https://*/*"], types: ["main_frame"] });
     }
+    const all = { urls: ["<all_urls>"] };
+    if (!chrome.webRequest.onBeforeRequest.hasListener(connStart)) chrome.webRequest.onBeforeRequest.addListener(connStart, { ...all, types: ["main_frame"] });
+    if (!chrome.webRequest.onCompleted.hasListener(connDone)) chrome.webRequest.onCompleted.addListener(connDone, all);
+    if (!chrome.webRequest.onErrorOccurred.hasListener(connError)) chrome.webRequest.onErrorOccurred.addListener(connError, all);
   } catch (e) {
     console.warn("webRequest nog niet beschikbaar:", e);
   }
 }
 registerWebRequest();
 chrome.permissions.onAdded.addListener(registerWebRequest);
-chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove([`tab:${id}`, `dismissed:${id}`]));
+chrome.tabs.onRemoved.addListener((id) => {
+  conns.delete(id); connQueue.delete(id); clearTimeout(connTimers.get(id)); connTimers.delete(id);
+  chrome.storage.session.remove([`tab:${id}`, `dismissed:${id}`, `conn:${id}`]);
+});
 
 function startAlarm() {
   chrome.alarms.create("resync", { periodInMinutes: 1 });

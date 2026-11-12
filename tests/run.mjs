@@ -232,6 +232,26 @@ await test("registreerbaar domein (bij benadering)", () => {
   assert.equal(M.regDomain("1.2.3.4"), "1.2.3.4");
 });
 
+await test("verbindingen: regel / hosts-bestand / live, en 'nog live' bij hetzelfde domein", () => {
+  const st = M.normState({ enabled: true, rules: [{ host: "www.shop.nl", ip: "10.0.0.1" }, { host: "*.klant.nl", ip: "10.0.0.2" }] });
+  const rec = { page: "www.shop.nl", total: 9, hosts: {
+    "www.shop.nl": { n: 4, ips: ["127.0.0.1"], types: { main_frame: 1, image: 3 } },
+    "cdn.shop.nl": { n: 2, ips: ["93.184.215.14"], types: { script: 2 } },
+    "shop.nl": { n: 1, ips: ["93.184.215.14"], types: { image: 1 } },
+    "fonts.gstatic.com": { n: 1, ips: ["142.250.1.1"], types: { font: 1 } },
+    "dev.local.test": { n: 1, ips: ["10.9.9.9"], types: { xmlhttprequest: 1 } },
+  } };
+  const a = M.analyzeConnections(rec, M.activeRules(st), { "dev.local.test": [{ ip: "10.9.9.9", kind: "override" }] });
+  const by = Object.fromEntries(a.rows.map((r) => [r.host, r]));
+  assert.equal(by["www.shop.nl"].kind, "rule");
+  assert.equal(by["dev.local.test"].kind, "hosts"); assert.equal(by["dev.local.test"].hostsIp, "10.9.9.9");
+  assert.ok(by["cdn.shop.nl"].stillLive && by["shop.nl"].stillLive);
+  assert.equal(by["cdn.shop.nl"].suggest.ip, "10.0.0.1");
+  assert.ok(!by["fonts.gstatic.com"].stillLive);
+  assert.deepEqual(a.rows.slice(0, 2).map((r) => r.host).sort(), ["cdn.shop.nl", "shop.nl"], "nog live bovenaan");
+  assert.equal(a.total, 9); assert.equal(a.types.image, 4); assert.equal(a.stillLive, 2); assert.equal(a.viaRule, 1);
+});
+
 console.log("Verzoek-headers per groep (declarativeNetRequest)");
 await test("headers: naam/waarde streng; hop-by-hop, verboden en eigen velden geblokkeerd", () => {
   assert.equal(M.headerProblem("X-Debug", "1"), null);

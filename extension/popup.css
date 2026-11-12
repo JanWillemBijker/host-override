@@ -247,3 +247,20 @@ form:has(#addGroup:not([hidden])) #addGroup { grid-column: 2; }
 input[type=password] { background: var(--field); color: var(--fg); border: 1px solid transparent; border-radius: 6px; padding: 6px 8px; font: inherit; }
 .geditor .help { margin: 8px 0 0; }
 .geditor .indent { margin-left: 23px; }
+
+/* Verbindingen van de pagina */
+.tab { padding: 7px 4px; font-size: 12.5px; }
+.chead { margin-bottom: 8px; }
+.ctitle { display: flex; flex-direction: column; gap: 2px; }
+.ctypes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip { font-size: 11px; background: var(--field); border: 1px solid var(--line); border-radius: 9px; padding: 0 7px; color: var(--muted); }
+.cwarn { margin-top: 8px; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: var(--warnbg); border-left: 3px solid #b35900; }
+.clist { border-top: 1px solid var(--line); }
+.crow { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.crow.still { background: var(--warnbg); margin: 0 -6px; padding: 6px; }
+.crow .t { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.crow .d { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+.chost { font-weight: 600; overflow-wrap: anywhere; }
+.cn { margin-left: auto; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+.mini-add { margin-top: 4px; font-size: 11.5px; padding: 3px 8px; }
+.cfilter { margin: 0 0 0 auto; }

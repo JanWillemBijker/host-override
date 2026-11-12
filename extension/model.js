@@ -394,3 +394,34 @@ export function groupName(g, state, t = (x) => x) {
   }
   return g.id;
 }
+
+// ---------- Verbindingen van een pagina beoordelen ----------
+// rec: { page, total, hosts: { host: { n, err, cache, ips, types } } } (bijgehouden door de achtergrond)
+// active: actieve regels; hostsHits: { host: [{ip, kind}] } uit het hosts-bestand (optioneel).
+// Per host: kind "rule" | "hosts" | "live". stillLive = live, maar hetzelfde registreerbare domein als een
+// host met een regel (www vs kaal, cdn.x, api.x): die vergeet je makkelijk. suggest = regel om het IP van over te nemen.
+export function analyzeConnections(rec, active, hostsHits = {}) {
+  const rows = Object.entries(rec?.hosts || {}).map(([host, e]) => {
+    const rule = matchRule(active, host);
+    const hits = (Object.hasOwn(hostsHits, host) ? hostsHits[host] : []).filter((x) => x.kind !== "blocked");
+    return {
+      host, n: e.n || 0, err: e.err || 0, cache: e.cache || 0, ips: e.ips || [], types: e.types || {},
+      kind: rule ? "rule" : hits.length ? "hosts" : "live", rule, hostsIp: hits[0]?.ip || null, reg: regDomain(host),
+      stillLive: false, suggest: null,
+    };
+  });
+  const regs = new Map();
+  for (const r of rows) if (r.kind === "rule" && !regs.has(r.reg)) regs.set(r.reg, r.rule);
+  for (const r of active) { const reg = regDomain(r.host); if (!regs.has(reg)) regs.set(reg, r); }
+  for (const r of rows) {
+    if (r.kind === "live" && !isIp(r.host) && regs.has(r.reg)) { r.stillLive = true; r.suggest = regs.get(r.reg); }
+  }
+  rows.sort((a, b) => (b.stillLive - a.stillLive) || (a.kind === "rule") - (b.kind === "rule") || b.n - a.n || a.host.localeCompare(b.host));
+  const types = {};
+  for (const r of rows) for (const [k, v] of Object.entries(r.types)) types[k] = (types[k] || 0) + v;
+  return {
+    rows, types, total: rows.reduce((a, r) => a + r.n, 0), hosts: rows.length,
+    viaRule: rows.filter((r) => r.kind === "rule").length, viaHosts: rows.filter((r) => r.kind === "hosts").length,
+    stillLive: rows.filter((r) => r.stillLive).length,
+  };
+}

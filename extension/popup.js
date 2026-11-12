@@ -4,7 +4,7 @@ import {
 } from "./common.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
-  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
 } from "./model.js";
 import { initI18n, t } from "./i18n.js";
 import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
@@ -770,6 +770,95 @@ $("hostsImport").onclick = async () => {
   if (add.length) update({ rules: [...rules, ...add], enabled: true });
 };
 
+// --- Verbindingen van de pagina ---
+const TYPE_LABEL = { main_frame: "pagina", sub_frame: "frame", stylesheet: "css", script: "script", image: "afbeelding", font: "lettertype",
+  xmlhttprequest: "xhr/fetch", media: "media", websocket: "websocket", ping: "ping", csp_report: "csp", object: "object", other: "overig" };
+const typeName = (k) => t(TYPE_LABEL[k] || "overig");
+let connHosts = { key: "", v: {} }; // hosts-bestand-treffers voor de hosts op de pagina
+let connLast = null;
+
+async function renderConn() {
+  const granted = await chrome.permissions.contains(ALL_SITES);
+  $("cPerm").hidden = granted;
+  if (!granted || !tab) {
+    $("cHead").hidden = true; $("cList").textContent = ""; $("cEmpty").hidden = granted ? false : true;
+    if (granted && !tab) $("cEmpty").textContent = t("Open een http(s)-pagina om de verbindingen te zien.");
+    return;
+  }
+  const state = await load();
+  const rec = (await chrome.storage.session.get(`conn:${tab.id}`))[`conn:${tab.id}`];
+  $("cEmpty").textContent = t("Nog geen verzoeken gezien voor deze tab. Ververs de pagina om alle verbindingen te zien.");
+  $("cEmpty").hidden = !!(rec && rec.total);
+  $("cHead").hidden = !(rec && rec.total);
+  if (!rec || !rec.total) { $("cList").textContent = ""; return; }
+  const names = Object.keys(rec.hosts).filter(isHost).sort().slice(0, 50);
+  const key = names.join(",");
+  if (connHosts.key !== key) {
+    connHosts = { key, v: {} };
+    helperFetch("/__hosts", { body: { names } }).then((r) => r.ok ? r.json() : null).then((j) => {
+      if (connHosts.key === key && j?.matches) { connHosts.v = j.matches; renderConn(); }
+    }).catch(() => { /* geen helper: alleen regels en live */ });
+  }
+  const active = activeRules(state);
+  const a = analyzeConnections(rec, active, connHosts.v);
+  connLast = { a, rec, state };
+  const only = $("cOnlyDomain").checked;
+  const pageReg = regDomain(rec.page || tab.host);
+  const rows = only ? a.rows.filter((r) => r.reg === pageReg) : a.rows;
+  $("cPage").textContent = rec.page || tab.host;
+  $("cSum").textContent = t("{n} verzoeken naar {h} hosts", { n: a.total, h: a.hosts }) +
+    (a.viaRule ? " · " + t("{n} via een regel", { n: a.viaRule }) : "") + (a.viaHosts ? " · " + t("{n} via hosts-bestand", { n: a.viaHosts }) : "") +
+    (rec.partial ? " · " + t("onvolledig, ververs de pagina") : "") + (rec.dropped ? " · " + t("{n} hosts niet getoond", { n: rec.dropped }) : "");
+  $("cTypes").replaceChildren(...Object.entries(a.types).sort((x, y) => y[1] - x[1]).map(([k, v]) => h("span", { class: "chip" }, `${typeName(k)} ${v}`)));
+  $("cWarn").hidden = !a.stillLive;
+  $("cWarn").textContent = a.stillLive ? t("{n} host(s) van een overschreven domein komen nog van de live server.", { n: a.stillLive }) : "";
+  const list = $("cList");
+  list.textContent = "";
+  for (const r of rows) {
+    const g = r.rule ? groupOf(state, r.rule.group) : null;
+    const tag = r.kind === "rule" ? h("span", { class: "b test", style: g ? `background:${g.color}` : null }, t("regel → {ip}", { ip: r.rule.ip }))
+      : r.kind === "hosts" ? h("span", { class: "b hosts" }, t("hosts-bestand → {ip}", { ip: r.hostsIp }))
+      : r.stillLive ? h("span", { class: "b warn" }, t("nog live")) : h("span", { class: "b" }, t("live"));
+    const ipText = r.kind === "rule" ? t("via de helper") : r.ips.join(", ") || (r.cache === r.n ? t("uit cache") : "-");
+    const types = Object.entries(r.types).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${typeName(k)} ${v}`).join(" · ");
+    const row = h("div", { class: "crow" + (r.stillLive ? " still" : "") },
+      h("div", { class: "t" }, h("span", { class: "chost" }, r.host), tag, h("span", { class: "cn", title: t("Aantal verzoeken") }, String(r.n))),
+      h("div", { class: "d" }, h("span", { class: "mono" }, ipText), types ? " · " + types : "", r.err ? " · " + t("{n} mislukt", { n: r.err }) : ""));
+    if (r.stillLive && r.suggest) {
+      const b = h("button", { class: "secondary mini-add", type: "button" }, t("Regel met zelfde IP ({ip})", { ip: r.suggest.ip }));
+      b.onclick = async () => {
+        const s = await load();
+        if (s.rules.some((x) => x.host === r.host)) return;
+        const group = r.suggest.readOnly ? DEFAULT_GROUP : r.suggest.group;
+        update({ rules: [...s.rules, { host: r.host, ip: r.suggest.ip, enabled: true, group, note: t("toegevoegd vanuit Verbindingen") }] });
+        b.disabled = true;
+        b.textContent = t("Toegevoegd, ververs de pagina");
+      };
+      row.append(h("div", { class: "d" }, b));
+    }
+    list.append(row);
+  }
+}
+let connTimer = 0;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "session" || !tab || !changes[`conn:${tab.id}`] || $("viewConn").hidden) return;
+  clearTimeout(connTimer);
+  connTimer = setTimeout(renderConn, 400);
+});
+$("cOnlyDomain").onchange = renderConn;
+$("cReload").onclick = () => { if (tab) chrome.tabs.reload(tab.id, { bypassCache: true }); };
+$("cPermBtn").onclick = async () => { if (await chrome.permissions.request(ALL_SITES)) { if (tab) await chrome.tabs.reload(tab.id); renderConn(); render(false); } };
+$("cCopy").onclick = () => {
+  if (!connLast) return;
+  const { a, rec } = connLast;
+  const lines = [`${t("Verbindingen")}: ${rec.page || tab?.host} (${new Date().toLocaleString()})`, $("cSum").textContent, ""];
+  for (const r of a.rows) {
+    const src = r.kind === "rule" ? `${t("regel")} → ${r.rule.ip}` : r.kind === "hosts" ? `${t("hosts-bestand")} → ${r.hostsIp}` : r.stillLive ? t("nog live") : t("live");
+    lines.push(`${r.host}\t${src}\t${r.ips.join(", ") || "-"}\t${r.n}\t${Object.entries(r.types).map(([k, v]) => `${typeName(k)} ${v}`).join(", ")}`);
+  }
+  copy(lines.join("\n"), $("cCopy"));
+};
+
 // --- Taal ---
 $("langSel").value = langPref;
 $("langSel").onchange = async () => {
@@ -778,7 +867,7 @@ $("langSel").onchange = async () => {
 };
 
 // --- Tabs: Regels / DNS-check / Meer ---
-const VIEWS = { rules: ["tabRules", "viewRules"], dns: ["tabDns", "viewDns"], more: ["tabMore", "viewMore"] };
+const VIEWS = { rules: ["tabRules", "viewRules"], conn: ["tabConn", "viewConn"], dns: ["tabDns", "viewDns"], more: ["tabMore", "viewMore"] };
 let dnsStarted = false, lastDnsHost = null;
 function autoDns() {
   if (!tab) return;
@@ -797,6 +886,7 @@ function showView(name) {
     $(tabId).tabIndex = on ? 0 : -1;
   }
   if (name === "more") { render(false); loadHostsFile(); }
+  if (name === "conn") renderConn();
   if (name === "dns") { if (tab) autoDns(); else $("dDomain").focus(); }
 }
 for (const [key, [tabId]] of Object.entries(VIEWS)) $(tabId).onclick = () => showView(key);
@@ -829,6 +919,7 @@ if (sideMode) {
     const changed = nt?.host !== tab?.host;
     tab = nt;
     if (changed) { render(true); if (!$("viewDns").hidden) autoDns(); } else render(false);
+    if (!$("viewConn").hidden) renderConn();
   };
   chrome.tabs.onActivated.addListener(follow);
   chrome.tabs.onUpdated.addListener((_id, info, t2) => { if (t2.active && (info.url || info.status === "complete")) follow(); });
