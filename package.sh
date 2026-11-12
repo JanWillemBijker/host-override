@@ -8,4 +8,8 @@ for f in extension/*.js extension/helper/*.js; do node --check "$f" 2>/dev/null 
 mkdir -p dist
 rm -f "dist/host-override-$VERSION.zip"
 ( cd extension && zip -qr "../dist/host-override-$VERSION.zip" . -x '*.DS_Store' )
+# De losse helper-binaries (dist/helper/, ./build-helper.sh) horen nooit in de extensie: die biedt alleen een downloadlink.
+if unzip -l "dist/host-override-$VERSION.zip" | grep -qE 'host-override-helper|helper-bin/|\.exe$'; then
+  echo "Fout: helper-binary in de extensie-zip" >&2; exit 1
+fi
 echo "Gemaakt: dist/host-override-$VERSION.zip"

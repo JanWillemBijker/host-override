@@ -19,7 +19,11 @@ const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__statu
 // Uitbreidingen binnen protocol 6 (de extensie ziet in /__status welke er zijn):
 // targets = doel mag een hostnaam zijn, resolve = /__resolve
 // check2 = /__check met detail (redirectketen, headers, certificaat www), crtsh = /__crtsh, rdap = /__rdap
-const FEATURES = ["hosts", "targets", "resolve", "check2", "crtsh", "rdap"];
+// pair = eenmalig koppelen met een 6-cijferige code (/__pair), alleen in een koppelvenster (--pair of eerste start van de binary)
+const FEATURES = ["hosts", "targets", "resolve", "check2", "crtsh", "rdap", "pair"];
+// Draait dit als losse binary (Node Single Executable Application) of als `node proxy.js`?
+const IS_BIN = (() => { try { return require("node:sea").isSea(); } catch { return false; } })();
+const ARGS = process.argv.slice(2); // ook in de binary: argv = [binary, binary, ...opties]
 const PORT = Number(process.env.PORT || 8899);
 const DIR = path.join(os.homedir(), ".host-override");
 const FILE = path.join(DIR, "rules.json");
@@ -343,12 +347,94 @@ function hostsApi(req, res) {
   });
 }
 
+// ---------- Eenmalig koppelen (pairing) ----------
+// Alleen tijdens een koppelvenster: de helper is in de voorgrond gestart (eerste start van de binary of --pair) en
+// toont een willekeurige 6-cijferige code. De gebruiker typt die code in de extensie; de extensie stuurt de code en
+// haar geheim naar POST /__pair. Het extensie-ID komt uit de Origin-header (die kan een website niet vervalsen).
+// - Code geldt 5 minuten, één keer (daarna is het venster dicht), max. 5 foute pogingen (dan ook dicht).
+// - Zelfde controles als de andere opdrachten: Host 127.0.0.1/localhost, Origin chrome-extension://, X-Host-Override.
+// - Schrijft config.json atomisch met rechten 0600 (map 0700). Zonder koppelvenster: 410, nooit stil koppelen.
+const PAIR_TTL = Number(process.env.HOST_OVERRIDE_PAIR_TTL) > 0 ? Number(process.env.HOST_OVERRIDE_PAIR_TTL) : 5 * 60 * 1000;
+const PAIR_MAX_TRIES = 5;
+let pairing = null; // { code: Buffer, exp, tries, file }
+let onPaired = null; // callback na geslaagd koppelen (installeren als dienst e.d.)
+const newCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+function openPairing() {
+  const code = newCode();
+  pairing = { code: Buffer.from(code), exp: Date.now() + PAIR_TTL, tries: 0, file: false };
+  return code;
+}
+// Koppelverzoek via ~/.host-override/pair.json: als de helper al als dienst draait (poort bezet), schrijft een in de
+// voorgrond gestarte helper daar een code met vervaltijd. Alleen een privé bestand (0600, eigen gebruiker) telt;
+// wie dat kan schrijven, kan ook config.json schrijven, dus dit geeft niemand meer rechten.
+const PAIR_FILE = path.join(DIR, "pair.json");
+function filePairing() {
+  try {
+    const st = fs.lstatSync(PAIR_FILE);
+    const priv = st.isFile() && (process.platform === "win32" || ((st.mode & 0o077) === 0 && st.uid === process.getuid()));
+    const d = priv ? JSON.parse(fs.readFileSync(PAIR_FILE, "utf8")) : null;
+    if (!d || typeof d.code !== "string" || !/^\d{6}$/.test(d.code) || !(d.exp > Date.now()) || d.exp > Date.now() + PAIR_TTL + 5000) {
+      fs.rmSync(PAIR_FILE, { force: true });
+      return null;
+    }
+    return { code: Buffer.from(d.code), exp: d.exp, tries: 0, file: true };
+  } catch { return null; }
+}
+function currentPairing() {
+  if (pairing && !pairing.file) { if (Date.now() < pairing.exp) return pairing; pairing = null; return null; }
+  const f = filePairing();
+  if (!f) { pairing = null; return null; }
+  if (!pairing || !pairing.code.equals(f.code)) pairing = f; // nieuw verzoek; foute pogingen tellen per code
+  return pairing;
+}
+function closePairing() {
+  if (pairing?.file) fs.rmSync(PAIR_FILE, { force: true });
+  pairing = null;
+}
+function writeConfig(origin, secret) {
+  fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(DIR, 0o700);
+  const tmp = path.join(DIR, `.config.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`);
+  const fd = fs.openSync(tmp, "wx", 0o600);
+  try { fs.writeSync(fd, JSON.stringify({ origins: [origin], secret }) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(tmp, CONFIG);
+  if (process.platform !== "win32") fs.chmodSync(CONFIG, 0o600);
+}
+function pair(req, res) {
+  const reply = (code, obj) => res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(obj));
+  const origin = String(req.headers.origin || "");
+  if (!ORIGIN_RE.test(origin) || req.headers["x-host-override"] !== "1") return reply(403, { error: "forbidden" });
+  if (req.method !== "POST") return reply(405, { error: "POST verwacht" });
+  let body = "";
+  req.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
+  req.on("end", () => {
+    if (!currentPairing()) return reply(410, { error: "no-pairing" });
+    let d;
+    try { d = JSON.parse(body); } catch { return reply(400, { error: "ongeldige invoer" }); }
+    const secret = typeof d?.secret === "string" ? d.secret.toLowerCase() : "";
+    const got = Buffer.from(typeof d?.code === "string" ? d.code.replace(/\s/g, "") : "");
+    if (!SECRET_RE.test(secret)) return reply(400, { error: "ongeldige invoer" });
+    const ok = got.length === pairing.code.length && crypto.timingSafeEqual(got, pairing.code);
+    if (!ok) {
+      if (++pairing.tries >= PAIR_MAX_TRIES) { closePairing(); console.log("Te veel foute codes: koppelen gestopt. Start opnieuw voor een nieuwe code."); return reply(410, { error: "no-pairing" }); }
+      return reply(403, { error: "code", left: PAIR_MAX_TRIES - pairing.tries });
+    }
+    closePairing(); // eenmalig
+    try { writeConfig(origin, secret); } catch (e) { console.error("Kon config.json niet schrijven:", e.message); return reply(500, { error: "config" }); }
+    loadConfig();
+    console.log(`Gekoppeld met ${origin}.`);
+    reply(200, { ok: true });
+    if (onPaired) setImmediate(onPaired);
+  });
+}
+
 // Status zonder token: versie, of er een geldige config is, en een bewijs dat deze helper het geheim kent.
 // De extensie stuurt een willekeurige nonce en controleert proof = HMAC-SHA256(geheim, "host-override/status:" + nonce)
 // voordat ze het geheim of regels stuurt. Een ander programma op poort 8899 kan dat bewijs niet leveren.
 function status(req, res) {
   const nonce = new URL(req.url, "http://x").searchParams.get("nonce") || "";
-  const out = { helper: HELPER_VERSION, configured: !!config, features: FEATURES };
+  const out = { helper: HELPER_VERSION, configured: !!config, features: FEATURES, kind: IS_BIN ? "bin" : "node",
+    pairing: !!currentPairing() };
   if (config && /^[0-9a-f]{32,128}$/.test(nonce)) {
     out.proof = crypto.createHmac("sha256", config.secret).update("host-override/status:" + nonce).digest("hex");
   }
@@ -369,6 +455,7 @@ const server = http.createServer((req, res) => {
   // Eigen pagina's (geen proxy-verzoek): alleen via 127.0.0.1/localhost, niet via een herbonden domeinnaam.
   if (req.url.startsWith("/") && !localHost(req)) { res.writeHead(403).end("forbidden"); return; }
   if (req.url.split("?")[0] === "/__status") return status(req, res);
+  if (req.url.split("?")[0] === "/__pair") return pair(req, res);
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
     res.end(`Host Override proxy draait (versie ${HELPER_VERSION}).${config ? "" : " Niet ingesteld: plak het setup-commando uit de extensie."}\n`);
@@ -391,6 +478,8 @@ const server = http.createServer((req, res) => {
     req.pipe(out);
   }, (e) => { res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" }).end("Host Override: doel niet gevonden (" + e.message + ")"); });
 });
+const sockets = new Set();
+server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
 server.maxConnections = 512;
 server.headersTimeout = 30 * 1000;
 server.requestTimeout = 0; // lange uploads via de proxy mogen; inactiviteit vangt setTimeout hieronder af
@@ -433,7 +522,94 @@ server.on("error", (e) => {
   process.exit(1);
 });
 
-tightenPerms();
-load();
-loadConfig();
-server.listen(PORT, "127.0.0.1", () => console.log(`Host Override proxy op 127.0.0.1:${PORT} (${rules.length} regels geladen, ${config ? "alleen " + config.origins.join(", ") + " met geheim" : "GEEN geldige config.json: alle opdrachten worden geweigerd, plak het setup-commando opnieuw"})`));
+// ---------- Starten ----------
+// node proxy.js            -> helper draaien (zoals het setup-commando en de LaunchAgent/systemd/Opstarten doen)
+// binary zonder opties     -> instellen: koppelen met een nieuwe code, daarna als dienst installeren (zie setup())
+// --serve                  -> alleen draaien (zo start de dienst de binary)
+// --pair                   -> draaien met een koppelvenster (nieuwe code), ook als er al een config is
+// --install / --uninstall  -> automatisch starten bij inloggen aan- of uitzetten (service.js)
+function start({ pairMode = false } = {}) {
+  tightenPerms();
+  load();
+  loadConfig();
+  server.listen(PORT, "127.0.0.1", () => {
+    console.log(`Host Override proxy op 127.0.0.1:${PORT} (${rules.length} regels geladen, ${config ? "alleen " + config.origins.join(", ") + " met geheim" : "GEEN geldige config.json: alle opdrachten worden geweigerd" + (pairMode ? "" : ", koppel de helper opnieuw")})`);
+    if (pairMode) showCode(openPairing());
+  });
+}
+function showCode(code) {
+  const spaced = code.slice(0, 3) + " " + code.slice(3);
+  console.log("");
+  console.log("  ┌──────────────────────────────────────────┐");
+  console.log(`  │   Koppelcode / pairing code:  ${spaced}    │`);
+  console.log("  └──────────────────────────────────────────┘");
+  console.log("  Typ deze code in de extensie (Host Override > Koppel helper). Geldig 5 minuten, één keer.");
+  console.log("  Type this code into the extension (Host Override > Connect helper). Valid 5 minutes, once.");
+  console.log("");
+}
+const has = (f) => ARGS.includes(f);
+if (has("--version")) {
+  console.log(`Host Override helper (protocol ${HELPER_VERSION}${IS_BIN ? ", binary" : ""}, Node ${process.versions.node})`);
+} else if (has("--help") || has("-h")) {
+  console.log("Host Override helper\n  (geen optie)  instellen: koppelen en automatisch starten bij inloggen\n  --pair        nieuwe koppelcode (ook als de helper al gekoppeld is)\n  --serve       alleen draaien\n  --install     automatisch starten bij inloggen\n  --uninstall   automatisch starten uitzetten en ~/.host-override verwijderen\n  --version     versie");
+} else if (has("--install") || has("--uninstall")) {
+  const svc = loadService();
+  if (!svc) process.exit(1);
+  try { has("--install") ? svc.install() : svc.uninstall(); } catch (e) { console.error(e.message); process.exit(1); }
+} else if (has("--serve") || (!IS_BIN && !has("--pair"))) {
+  start();
+} else if (has("--pair")) {
+  start({ pairMode: true }); // koppelvenster; blijft daarna gewoon draaien
+} else {
+  setup(); // binary zonder opties
+}
+
+// Instellen (binary zonder opties): altijd koppelen met een nieuwe code (ook bij bijwerken: zo kan een andere
+// extensie of een verlopen geheim nooit stil blijven hangen), daarna kopiëren naar ~/.host-override/bin en
+// automatisch laten starten. Draait er al een helper met koppel-ondersteuning, dan loopt het koppelen via die
+// helper (pair.json); anders stopt de oude dienst en draait deze helper zelf tot er gekoppeld is.
+async function setup() {
+  const svc = loadService();
+  if (!svc) process.exit(1);
+  const running = await probe();
+  if (running?.features?.includes("pair")) {
+    const id = () => { try { const st = fs.statSync(CONFIG); return `${st.ino}:${st.mtimeMs}`; } catch { return ""; } };
+    const before = id();
+    const code = newCode();
+    fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+    fs.rmSync(PAIR_FILE, { force: true });
+    fs.writeFileSync(PAIR_FILE, JSON.stringify({ code, exp: Date.now() + PAIR_TTL }), { mode: 0o600, flag: "wx" });
+    showCode(code);
+    const t0 = Date.now();
+    while (Date.now() - t0 < PAIR_TTL + 2000 && fs.existsSync(PAIR_FILE)) await new Promise((r) => setTimeout(r, 500));
+    fs.rmSync(PAIR_FILE, { force: true });
+    loadConfig();
+    if (!config || id() === before) { console.error("Niet gekoppeld (code verlopen of te vaak fout). Start de helper opnieuw voor een nieuwe code."); process.exitCode = 1; return; }
+    console.log("Gekoppeld. Helper bijwerken en automatisch laten starten...");
+    try { svc.install(); } catch (e) { console.error(e.message); process.exitCode = 1; }
+    return;
+  }
+  svc.stop(); // oude dienst (ook de Node-helper) maakt de poort vrij
+  for (let i = 0; i < 20 && await portBusy(); i++) await new Promise((r) => setTimeout(r, 250));
+  onPaired = () => {
+    server.close();
+    for (const s of sockets) s.destroy();
+    setTimeout(() => { try { svc.install(); } catch (e) { console.error(e.message); process.exitCode = 1; } }, 300);
+  };
+  start({ pairMode: true });
+}
+function probe() {
+  return new Promise((res) => {
+    const r = http.get({ host: "127.0.0.1", port: PORT, path: "/__status", timeout: 1500 }, (resp) => {
+      let d = ""; resp.on("data", (c) => { d += c; }); resp.on("end", () => { try { res(JSON.parse(d)); } catch { res(null); } });
+    });
+    r.on("error", () => res(null)); r.on("timeout", () => { r.destroy(); res(null); });
+  });
+}
+function portBusy() {
+  return new Promise((res) => { const t = net.createServer().once("error", () => res(true)).listen(PORT, "127.0.0.1", () => t.close(() => res(false))); });
+}
+function loadService() {
+  try { return require("./service.js"); }
+  catch (e) { console.error("service.js ontbreekt (alleen in de losse helper-binary):", e.message); return null; }
+}

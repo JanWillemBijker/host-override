@@ -1,5 +1,6 @@
 // Tests voor Host Override: hosts-bestand (helper), herkenning live/niet-live en de pagina-indicator.
 //   node tests/run.mjs
+//   HELPER_BIN=dist/helper/stage-of-uitgepakte/host-override-helper node tests/run.mjs   (zelfde tests tegen de binary)
 // Start een eigen helper op een vrije poort met een tijdelijke HOME en een nep-hosts-bestand
 // (HOST_OVERRIDE_HOSTS_FILE). Raakt een draaiende helper op 8899 en ~/.host-override niet aan.
 import { spawn } from "node:child_process";
@@ -409,16 +410,22 @@ await new Promise((r) => checkHttp.listen(0, "127.0.0.1", r));
 const deadPort = await freePort();
 assert.notEqual(port, 8899);
 
-function startHelper(withConfig = true) {
+// Helper starten: standaard `node proxy.js`, met HELPER_BIN de gebouwde binary (`--serve`). args: extra opties (--pair).
+const HELPER_BIN = process.env.HELPER_BIN ? path.resolve(process.env.HELPER_BIN) : null;
+if (HELPER_BIN) console.log("  (helper: binary " + HELPER_BIN + ")");
+function startHelper(withConfig = true, { args = [], env: extraEnv = {} } = {}) {
   if (withConfig) fs.writeFileSync(path.join(home, ".host-override", "config.json"), JSON.stringify({ origins: [ORIGIN], secret: SECRET }));
   else fs.rmSync(path.join(home, ".host-override", "config.json"), { force: true });
-  const child = spawn(process.execPath, [path.join(EXT, "helper", "proxy.js")], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, PORT: String(port), HOST_OVERRIDE_HOSTS_FILE: HOSTS, HOST_OVERRIDE_TEST_PORTS: `${checkHttp.address().port},${deadPort}` },
+  const [cmd, ...cmdArgs] = HELPER_BIN ? [HELPER_BIN, ...(args.length ? args : ["--serve"])] : [process.execPath, path.join(EXT, "helper", "proxy.js"), ...args];
+  const child = spawn(cmd, cmdArgs, {
+    env: { ...process.env, HOME: home, USERPROFILE: home, PORT: String(port), HOST_OVERRIDE_HOSTS_FILE: HOSTS, HOST_OVERRIDE_TEST_PORTS: `${checkHttp.address().port},${deadPort}`, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  child.output = () => out;
+  let out = "";
   return new Promise((res, rej) => {
-    let out = "";
-    child.stdout.on("data", (d) => { out += d; if (out.includes("proxy op 127.0.0.1")) res(child); });
+    const ready = () => out.includes("proxy op 127.0.0.1") && (!args.includes("--pair") || /code[^\n]*:\s+\d{3} \d{3}/.test(out));
+    child.stdout.on("data", (d) => { out += d; if (ready()) { child.code = (out.match(/:\s+(\d{3}) (\d{3})/) || []).slice(1).join(""); res(child); } });
     child.stderr.on("data", (d) => { out += d; });
     child.on("exit", (c) => rej(new Error("helper stopte: " + c + " " + out)));
     setTimeout(() => rej(new Error("helper start niet: " + out)), 5000);
@@ -641,9 +648,155 @@ await test("HOST_OVERRIDE_HOSTS_FILE komt alleen uit de omgeving van de helper",
   for (const f of ["setup.sh", "setup.ps1"]) assert.ok(!fs.readFileSync(path.join(EXT, "helper", f), "utf8").includes("HOST_OVERRIDE_HOSTS_FILE"));
   for (const f of fs.readdirSync(EXT).filter((x) => x.endsWith(".js"))) {
     const src = fs.readFileSync(path.join(EXT, f), "utf8");
-    assert.ok(!src.includes("HOST_OVERRIDE_HOSTS_FILE") && !src.includes("HOST_OVERRIDE_TEST_PORTS"), f);
+    assert.ok(!src.includes("HOST_OVERRIDE_HOSTS_FILE") && !src.includes("HOST_OVERRIDE_TEST_PORTS") && !src.includes("HOST_OVERRIDE_PAIR_TTL"), f);
   }
 });
+
+// ---------- 5. Koppelen met een code (/__pair) ----------
+console.log("Koppelen met een 6-cijferige code (/__pair)");
+const CFG = path.join(home, ".host-override", "config.json");
+const NEW_SECRET = crypto.randomBytes(32).toString("hex");
+const pairReq = (body, o = {}) => req("/__pair", { method: "POST", token: null, body, ...o });
+const statusOf = async () => (await req(`/__status?nonce=${"ef".repeat(16)}`, { token: null, origin: null, marker: false })).json;
+await test("zonder koppelvenster (gewoon draaien): /__pair geeft 410, ook met geldige invoer", async () => {
+  helper = await startHelper(false);
+  try {
+    assert.equal((await statusOf()).pairing, false);
+    assert.ok((await statusOf()).features.includes("pair"));
+    const r = await pairReq({ code: "123456", secret: NEW_SECRET });
+    assert.equal(r.status, 410); assert.equal(r.json.error, "no-pairing");
+    assert.ok(!fs.existsSync(CFG));
+  } finally { helper.kill(); }
+});
+await test("koppelvenster: verkeerde code, Origin, Host of marker geweigerd; juiste code schrijft config 0600 en werkt één keer", async () => {
+  helper = await startHelper(false, { args: ["--pair"] });
+  try {
+    const code = helper.code;
+    assert.match(code, /^\d{6}$/, "code staat in de uitvoer");
+    assert.equal((await statusOf()).pairing, true);
+    const wrong = String((Number(code) + 1) % 1000000).padStart(6, "0");
+    const w = await pairReq({ code: wrong, secret: NEW_SECRET });
+    assert.equal(w.status, 403); assert.equal(w.json.error, "code"); assert.equal(w.json.left, 4);
+    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { origin: null })).status, 403);
+    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { marker: false })).status, 403);
+    assert.equal((await pairReq({ code, secret: NEW_SECRET }, { host: `evil.example:${port}` })).status, 403);
+    assert.equal((await pairReq({ code, secret: "kort" })).status, 400);
+    assert.equal((await pairReq("{kapot")).status, 400);
+    assert.ok(!fs.existsSync(CFG), "nog geen config");
+    const ok = await pairReq({ code: code.slice(0, 3) + " " + code.slice(3), secret: NEW_SECRET.toUpperCase() });
+    assert.equal(ok.status, 200, ok.text);
+    const cfg = JSON.parse(fs.readFileSync(CFG, "utf8"));
+    assert.deepEqual(cfg, { origins: [ORIGIN], secret: NEW_SECRET });
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(CFG).mode & 0o777, 0o600, "config.json 0600");
+      assert.equal(fs.statSync(path.dirname(CFG)).mode & 0o777, 0o700, "map 0700");
+    }
+    assert.ok(!fs.readdirSync(path.dirname(CFG)).some((f) => f.endsWith(".tmp")), "geen tijdelijke bestanden");
+    // Direct in gebruik: status-bewijs met het nieuwe geheim, opdrachten met het nieuwe geheim.
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const st = (await req(`/__status?nonce=${nonce}`, { token: null, origin: null, marker: false })).json;
+    assert.equal(st.pairing, false);
+    assert.equal(st.proof, crypto.createHmac("sha256", NEW_SECRET).update("host-override/status:" + nonce).digest("hex"));
+    assert.equal((await req("/__hosts?names=a.example.com", { token: NEW_SECRET })).status, 200);
+    // Eenmalig: dezelfde code (of een ander geheim) werkt niet nog eens.
+    const again = await pairReq({ code, secret: crypto.randomBytes(32).toString("hex") });
+    assert.equal(again.status, 410);
+    assert.equal(JSON.parse(fs.readFileSync(CFG, "utf8")).secret, NEW_SECRET, "config niet overschreven");
+  } finally { helper.kill(); }
+});
+await test("na 5 foute codes is het koppelvenster dicht (ook voor de juiste code)", async () => {
+  helper = await startHelper(false, { args: ["--pair"] });
+  try {
+    const code = helper.code;
+    const wrong = String((Number(code) + 7) % 1000000).padStart(6, "0");
+    for (let i = 0; i < 4; i++) assert.equal((await pairReq({ code: wrong, secret: NEW_SECRET })).status, 403);
+    assert.equal((await pairReq({ code: wrong, secret: NEW_SECRET })).status, 410);
+    assert.equal((await pairReq({ code, secret: NEW_SECRET })).status, 410);
+    assert.ok(!fs.existsSync(CFG));
+  } finally { helper.kill(); }
+});
+await test("code verloopt (HOST_OVERRIDE_PAIR_TTL, alleen omgeving; standaard 5 minuten)", async () => {
+  helper = await startHelper(false, { args: ["--pair"], env: { HOST_OVERRIDE_PAIR_TTL: "300" } });
+  try {
+    await new Promise((r) => setTimeout(r, 450));
+    assert.equal((await statusOf()).pairing, false);
+    assert.equal((await pairReq({ code: helper.code, secret: NEW_SECRET })).status, 410);
+    assert.ok(!fs.existsSync(CFG));
+  } finally { helper.kill(); }
+  assert.match(fs.readFileSync(path.join(EXT, "helper", "proxy.js"), "utf8"), /: 5 \* 60 \* 1000;/);
+});
+await test("--pair met bestaande config: nieuwe koppeling vervangt de oude", async () => {
+  helper = await startHelper(true, { args: ["--pair"] });
+  try {
+    assert.equal((await req("/__hosts", {})).status, 200, "oude config werkt tijdens het venster");
+    assert.equal((await pairReq({ code: helper.code, secret: NEW_SECRET })).status, 200);
+    assert.equal((await req("/__hosts", {})).status, 403, "oude geheim werkt niet meer");
+    assert.equal((await req("/__hosts", { token: NEW_SECRET })).status, 200);
+  } finally { helper.kill(); }
+});
+
+await test("pair.json (voorgrond-helper terwijl de dienst draait): privé bestand opent een venster, eenmalig", async () => {
+  helper = await startHelper(true);
+  const PF = path.join(home, ".host-override", "pair.json");
+  try {
+    assert.equal((await statusOf()).pairing, false);
+    if (process.platform !== "win32") {
+      fs.writeFileSync(PF, JSON.stringify({ code: "123456", exp: Date.now() + 60000 }), { mode: 0o644 });
+      fs.chmodSync(PF, 0o644);
+      assert.equal((await statusOf()).pairing, false, "leesbaar voor anderen: genegeerd");
+      assert.ok(!fs.existsSync(PF), "en verwijderd");
+    }
+    fs.writeFileSync(PF, JSON.stringify({ code: "123456", exp: Date.now() + 10 * 60 * 1000 }), { mode: 0o600 });
+    assert.equal((await statusOf()).pairing, false, "vervaltijd te ver weg: genegeerd");
+    fs.writeFileSync(PF, JSON.stringify({ code: "654321", exp: Date.now() + 60000 }), { mode: 0o600 });
+    assert.equal((await statusOf()).pairing, true);
+    assert.equal((await pairReq({ code: "123456", secret: NEW_SECRET })).status, 403);
+    assert.equal((await pairReq({ code: "654321", secret: NEW_SECRET })).status, 200);
+    assert.ok(!fs.existsSync(PF), "verbruikt");
+    assert.equal(JSON.parse(fs.readFileSync(CFG, "utf8")).secret, NEW_SECRET);
+    assert.equal((await pairReq({ code: "654321", secret: SECRET })).status, 410);
+  } finally { helper.kill(); fs.rmSync(PF, { force: true }); }
+});
+
+// ---------- 6. Binary: bundel en automatisch starten (droog, tijdelijke HOME) ----------
+console.log("Helper-binary: bundel en --install/--uninstall (droog)");
+const BUNDLE = path.join(tmp, "bundle", "host-override-helper.js");
+await test("bundel bouwt en bevat proxy.js, dnstools.js en service.js", async () => {
+  await new Promise((res, rej) => spawn(process.execPath, [path.join(ROOT, "helper-bin", "build-helper.mjs"), "--bundle-only"], { stdio: "ignore" })
+    .on("exit", (c) => (c ? rej(new Error("bundle exit " + c)) : res())));
+  fs.mkdirSync(path.dirname(BUNDLE), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, "dist", "helper", "host-override-helper.js"), BUNDLE);
+  const src = fs.readFileSync(BUNDLE, "utf8");
+  for (const x of ['"./dnstools.js"', '"./service.js"', "function pair(req, res)"]) assert.ok(src.includes(x), x);
+});
+for (const plat of ["darwin", "linux", "win32"]) {
+  await test(`--install / --uninstall (${plat}, droog): starter wijst naar de kopie met --serve, rechten privé`, async () => {
+    const h = path.join(tmp, "inst-" + plat);
+    fs.mkdirSync(path.join(h, ".host-override"), { recursive: true });
+    fs.writeFileSync(path.join(h, ".host-override", "config.json"), JSON.stringify({ origins: [ORIGIN], secret: SECRET }));
+    const runIt = (arg) => new Promise((res) => {
+      const c = spawn(process.execPath, [BUNDLE, arg], { env: { ...process.env, HOME: h, USERPROFILE: h, APPDATA: path.join(h, "AppData", "Roaming"), XDG_CONFIG_HOME: path.join(h, ".config"), HO_DRY_INSTALL: "1", HO_PLATFORM: plat }, stdio: ["ignore", "pipe", "pipe"] });
+      let o = ""; c.stdout.on("data", (d) => (o += d)); c.stderr.on("data", (d) => (o += d)); c.on("exit", (code) => res({ code, o }));
+    });
+    const r = await runIt("--install");
+    assert.equal(r.code, 0, r.o);
+    const copy = path.join(h, ".host-override", "bin", "host-override-helper.js");
+    assert.ok(fs.existsSync(copy), "kopie in ~/.host-override/bin");
+    if (process.platform !== "win32") assert.equal(fs.statSync(path.join(h, ".host-override", "bin")).mode & 0o777, 0o700);
+    const starter = { darwin: path.join(h, "Library", "LaunchAgents", "com.hostoverride.proxy.plist"),
+      linux: path.join(h, ".config", "systemd", "user", "host-override.service"),
+      win32: path.join(h, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "HostOverride.vbs") }[plat];
+    const text = fs.readFileSync(starter, "utf8");
+    assert.ok(text.includes(copy.replace(/&/g, "&amp;")) && text.includes("--serve"), text);
+    assert.ok(!text.includes(SECRET), "geen geheim in het startbestand");
+    if (plat === "linux" && process.platform !== "win32") assert.equal(fs.statSync(starter).mode & 0o777, 0o600);
+    assert.ok(fs.existsSync(path.join(h, ".host-override", "config.json")), "config blijft staan");
+    const u = await runIt("--uninstall");
+    assert.equal(u.code, 0, u.o);
+    assert.ok(!fs.existsSync(starter) && !fs.existsSync(path.join(h, ".host-override")), "alles weg");
+  });
+}
 
 checkHttp.close();
 fs.rmSync(tmp, { recursive: true, force: true });
