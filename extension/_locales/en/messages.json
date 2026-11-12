@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "Host Override"
+  },
+  "extDesc": {
+    "message": "Test a site on another server (IP) in your normal Chrome while incognito keeps showing the live site. Includes a DNS check."
+  }
+}

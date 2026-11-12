@@ -1,0 +1,28 @@
+:root { --bg: #fff; --fg: #1c1c1e; --muted: #6b7280; --line: #e6e6ea; --card: #f8f8fa; --field: #f0f0f3; --accent: #d9480f; --ok: #2f9e44; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #f2f2f7; --muted: #9a9aa2; --line: #2c2c30; --card: #202023; --field: #2a2a2e; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, sans-serif; }
+main { max-width: 680px; margin: 0 auto; padding: 40px 20px 60px; }
+header { display: flex; gap: 16px; align-items: center; margin-bottom: 28px; }
+h1 { margin: 0; font-size: 26px; } h2 { margin: 0 0 6px; font-size: 17px; }
+.lead { margin: 4px 0 0; color: var(--muted); }
+.step { display: flex; gap: 16px; padding: 18px; margin-bottom: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.num { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: grid; place-items: center; }
+.body { flex: 1; min-width: 0; } .body p { margin: 6px 0; }
+.once { color: var(--muted); font-weight: 400; font-size: 14px; }
+.need { color: var(--muted); font-size: 14px; }
+.lbl { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+select { display: block; margin-top: 4px; padding: 6px 8px; background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+ol { padding-left: 20px; margin: 8px 0 12px; } .hint { color: var(--muted); }
+code { background: var(--field); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+button.primary:hover { filter: brightness(1.08); }
+details { margin-top: 10px; color: var(--muted); font-size: 13px; } summary { cursor: pointer; }
+textarea { width: 100%; margin-top: 6px; background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 12px ui-monospace, Menlo, monospace; }
+.state { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.state.ok { color: var(--ok); } .state.ok .dot { background: var(--ok); }
+.state.wait .dot { animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+.tips { margin-top: 28px; } .tips ul { padding-left: 20px; } .tips li { margin: 6px 0; }
+a { color: var(--accent); }

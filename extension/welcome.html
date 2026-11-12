@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welkom bij Host Override</title>
+<link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+<main>
+  <header>
+    <img src="icons/icon128.png" alt="" width="56" height="56">
+    <div>
+      <h1>Host Override</h1>
+      <p class="lead">Test een site op een andere server, in je gewone Chrome. Incognito blijft de live site tonen.</p>
+    </div>
+  </header>
+
+  <section class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h2>Installeer de helper <span class="once">(eenmalig)</span></h2>
+      <p>Chrome mag zelf geen IP-adressen koppelen. Een klein programma op je eigen computer doet dat. Het is alleen bereikbaar vanaf deze computer en stuurt niets naar buiten.</p>
+      <p class="need" data-th>Je hebt <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a> nodig.</p>
+      <label class="lbl">Jouw systeem
+        <select id="os"></select>
+      </label>
+      <ol>
+        <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
+        <li><span data-th>Open <b id="term">Terminal</b>.</span> <span id="termHint" class="hint"></span></li>
+        <li data-th>Plak met <b id="paste">Cmd+V</b> en druk op Enter.</li>
+      </ol>
+      <button id="copy" class="primary">Kopieer setup-commando</button>
+      <details><summary>Toon het commando</summary><textarea id="cmd" readonly rows="8" spellcheck="false"></textarea></details>
+      <div id="state" class="state wait"><span class="dot"></span><span id="stateText">Wachten op de helper...</span></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h2>Pin het icoon</h2>
+      <p>Klik op de puzzelknop rechtsboven in Chrome en daarna op het speldje naast Host Override.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h2>Voeg een domein toe</h2>
+      <p data-th>Klik op het icoon, vul bijvoorbeeld <code>voorbeeld.nl</code> en het IP van je testserver in en klik op Toevoegen. Het icoon toont daarna een oranje cijfer. Open de site in een gewoon venster voor de testserver, en in een incognito-venster voor de live versie.</p>
+    </div>
+  </section>
+
+  <section class="tips">
+    <h2>Handig om te weten</h2>
+    <ul>
+      <li data-th><b>Alt+Shift+H</b> zet alles aan of uit.</li>
+      <li data-th>Met <b>*.voorbeeld.nl</b> pak je ook alle subdomeinen.</li>
+      <li data-th><b>IP-weergave</b> in de popup laat zien op welk IP de huidige site draait. Daarvoor vraagt de extensie eenmalig toestemming.</li>
+      <li data-th><b>Testvenster</b> in de popup opent met één klik een apart Chrome-venster met dezelfde regels, zodat je live en test naast elkaar ziet.</li>
+      <li data-th>Laat "Toestaan in incognito" <b>uit</b>, anders zie je daar ook de testserver.</li>
+    </ul>
+  </section>
+</main>
+<script type="module" src="welcome.js"></script>
+</body>
+</html>

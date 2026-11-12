@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="title"><img src="icons/icon32.png" alt="" width="20" height="20"><h1>Host Override</h1></div>
+    <div class="hright">
+      <button id="sideBtn" class="icon" title="Open als zijpaneel" aria-label="Open als zijpaneel" hidden>
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="2.5" width="5.5" height="11" rx="1.5" fill="currentColor"/></svg>
+      </button>
+      <label class="switch" title="Alles aan of uit (Alt+Shift+H)">
+        <input type="checkbox" id="master" aria-label="Host Override aan of uit"><span class="slider"></span>
+      </label>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Onderdelen">
+    <button id="tabRules" class="tab active" role="tab" aria-selected="true" aria-controls="viewRules">Regels</button>
+    <button id="tabDns" class="tab" role="tab" aria-selected="false" aria-controls="viewDns" tabindex="-1">DNS-check</button>
+    <button id="tabMore" class="tab" role="tab" aria-selected="false" aria-controls="viewMore" tabindex="-1">Meer</button>
+  </nav>
+
+  <div id="viewRules" role="tabpanel" aria-labelledby="tabRules">
+    <div id="helperBar" class="hbar" hidden>
+      <span id="hbarText"></span>
+      <button id="hbarBtn" class="primary mini-primary" aria-expanded="false"></button>
+    </div>
+    <div id="helper" class="card warn" hidden>
+      <strong id="helperTitle"></strong>
+      <p id="helperText"></p>
+      <ol>
+        <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
+        <li>Open <b id="termName">Terminal</b>, plak (<span id="pasteKey">Cmd+V</span>) en druk op Enter.</li>
+        <li data-th>Kom terug en klik op <b>Opnieuw controleren</b>.</li>
+      </ol>
+      <div class="row">
+        <button id="copySetup" class="primary">Kopieer setup-commando</button>
+        <button id="recheck" class="secondary">Opnieuw controleren</button>
+      </div>
+      <p class="small" data-th>Vereist <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a>. Eenmalig per computer. <a href="welcome.html" target="_blank">Uitgebreide uitleg</a>. Zonder helper kun je wel het commando voor een testvenster kopiëren (tab Meer).</p>
+    </div>
+
+    <div id="status" class="status" role="status"><span class="dot"></span><span id="statusText"></span></div>
+    <div id="help" class="help" hidden></div>
+
+    <section id="site" class="card" hidden>
+      <div class="siteTop">
+        <span id="siteHost" class="siteHost"></span>
+        <span id="siteKind" class="pill"></span>
+      </div>
+      <div class="liveRow">
+        <span class="label">Live IP</span>
+        <code id="liveIp">-</code>
+        <button id="copyIp" class="mini" title="Kopieer IP" hidden>Kopieer</button>
+        <button id="lookupBtn" class="mini" title="Vraagt het live IP op via Cloudflare DNS-over-HTTPS (stuurt de hostnaam naar Cloudflare)">Opzoeken</button>
+      </div>
+      <div id="dnsOut" class="small"></div>
+      <div class="row wrap">
+        <button id="useBtn" class="secondary" hidden>Overschrijf dit domein</button>
+        <button id="permBtn" class="secondary" hidden title="Vraagt toestemming om het IP van sites te lezen. Er wordt niets verstuurd of bewaard buiten je browser.">IP-weergave inschakelen</button>
+        <button id="incoBtn" class="secondary" title="Opent dezelfde pagina in een incognitovenster, zonder de extensie">Live in incognito</button>
+        <button id="dnsPageBtn" class="secondary" title="Controleert records, nameservers en servers van dit domein">DNS-check</button>
+      </div>
+    </section>
+
+    <input id="filter" type="search" class="filter" placeholder="Zoek in regels..." aria-label="Zoek in regels" hidden>
+    <div id="rules" class="rules"></div>
+    <div id="empty" class="empty" hidden>Nog geen regels. Voeg hieronder een domein en IP toe.</div>
+
+    <div id="bulk" class="bulk" hidden>
+      <input type="text" id="bulkIp" placeholder="Alle regels naar IP..." spellcheck="false" aria-label="IP voor alle regels">
+      <button id="bulkBtn" class="secondary">Toepassen</button>
+    </div>
+
+    <form id="add">
+      <input id="host" placeholder="example.nl  of  *.example.nl" autocomplete="off" spellcheck="false" required aria-label="Domein">
+      <input id="ip" placeholder="1.2.3.4" autocomplete="off" spellcheck="false" required aria-label="IP-adres">
+      <button class="primary">Toevoegen</button>
+    </form>
+    <div id="err" class="err" role="alert"></div>
+  </div>
+
+  <div id="viewDns" role="tabpanel" aria-labelledby="tabDns" hidden>
+    <form id="dForm" class="dform">
+      <input id="dDomain" list="dRecent" placeholder="voorbeeld.nl" autocomplete="off" spellcheck="false" aria-label="Domein">
+      <datalist id="dRecent"></datalist>
+      <select id="dResolver" aria-label="Resolver"></select>
+      <button class="primary">Controleer</button>
+    </form>
+    <div id="dErr" class="err" role="alert"></div>
+    <div id="dBanner" class="help" hidden></div>
+    <div id="dHint" class="empty">Controleert records, nameservers, resolvers, servers en e-mail van een domein. Geen dig-commando's nodig.</div>
+    <div id="dResults" class="secs" hidden>
+      <details id="dSummary" class="sec" data-title="Samenvatting"><summary><span class="sdot"></span><span class="stitle">Samenvatting</span><span class="ssub"></span></summary><div class="body"></div><div class="row"><button id="dCopy" class="secondary">Kopieer rapport voor ticket</button></div></details>
+      <details id="dRecords" class="sec" data-title="Records"><summary><span class="sdot"></span><span class="stitle">Records</span><span class="ssub"></span></summary><div class="body"></div></details>
+      <details id="dNs" class="sec" data-title="Nameservers"><summary><span class="sdot"></span><span class="stitle">Nameservers</span><span class="ssub"></span></summary><div class="body"></div></details>
+      <details id="dProp" class="sec" data-title="Resolvers vergelijken"><summary><span class="sdot"></span><span class="stitle">Resolvers vergelijken</span><span class="ssub"></span></summary><div class="body"></div></details>
+      <details id="dSrv" class="sec" data-title="Servers: live en test"><summary><span class="sdot"></span><span class="stitle">Servers: live en test</span><span class="ssub"></span></summary>
+        <div class="cmp row"><input id="dTestIp" placeholder="Test-IP vergelijken (optioneel)" autocomplete="off" spellcheck="false" aria-label="Test-IP om mee te vergelijken"><button id="dTestBtn" class="secondary" type="button">Vergelijk</button></div>
+        <div class="body"></div></details>
+      <details id="dMail" class="sec" data-title="E-mail"><summary><span class="sdot"></span><span class="stitle">E-mail</span><span class="ssub"></span></summary><div class="body"></div></details>
+    </div>
+  </div>
+
+  <div id="viewMore" role="tabpanel" aria-labelledby="tabMore" hidden>
+    <section class="card">
+      <span class="label">Instellingen</span>
+      <label class="field">Taal
+        <select id="langSel" aria-label="Taal">
+          <option value="auto">Automatisch (browsertaal)</option>
+          <option value="en">English</option>
+          <option value="nl">Nederlands</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="autoReload"> Tab automatisch herladen na een wijziging</label>
+      <label class="check"><input type="checkbox" id="pageBadge"> Toon een TEST-label in de pagina zelf (vereist IP-weergave)</label>
+      <label class="check"><input type="checkbox" id="sideDefault"> Open altijd als zijpaneel</label>
+      <p class="small" data-th>Sneltoets: Alt+Shift+H zet alles aan of uit. <a href="welcome.html" target="_blank">Installatie-uitleg</a></p>
+    </section>
+
+    <section id="cmdPanel" class="card">
+      <span class="label">Apart testvenster met deze regels</span>
+      <select id="os" aria-label="Besturingssysteem"></select>
+      <textarea id="cmdText" rows="6" spellcheck="false" readonly aria-label="Chrome-commando"></textarea>
+      <div class="row">
+        <button id="openWin" class="primary">Open testvenster</button>
+        <button id="copyCmd" class="secondary">Kopieer commando</button>
+      </div>
+      <p class="small">Opent een tweede Chrome met een eigen profiel (chrome-test) dat de regels gebruikt, met de huidige pagina. Sluit dat venster om te stoppen. Lukt openen niet, plak dan het commando in <span id="cmdWhere">Terminal</span> en druk op Enter. Het commando werkt ook zonder helper.</p>
+    </section>
+
+    <section id="share" class="card">
+      <span class="label">Regels delen (hosts-formaat)</span>
+      <textarea id="hostsText" rows="5" spellcheck="false" placeholder="1.2.3.4 voorbeeld.nl www.voorbeeld.nl" aria-label="Regels in hosts-formaat"></textarea>
+      <div class="row">
+        <button id="copyHosts" class="secondary">Kopieer</button>
+        <button id="applyHosts" class="primary">Toevoegen uit tekst</button>
+      </div>
+      <p class="small">Plak regels van een collega en kies "Toevoegen uit tekst". Werkt ook met echte hosts-regels.</p>
+    </section>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
