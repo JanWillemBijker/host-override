@@ -20,7 +20,8 @@ Gemaakt door BijBijker (https://bijbijker.nl).
 Host Override koppelt domeinen aan een ander IP-adres, alleen in je gewone Chrome-profiel. Ideaal om een website op een staging- of nieuwe server te controleren, zonder je hosts-bestand aan te passen.
 
 - Vergelijk live en test naast elkaar: gewoon venster = testserver, incognito = live site.
-- Zie op welk IP de huidige site draait, met een TEST-label op tabs met een override.
+- Zie op welk IP de huidige site draait en of dat het live IP is: herkent je eigen regels, je hosts-bestand (alleen lezen, macOS/Windows/Linux) en een IP dat afwijkt van publieke DNS.
+- Instelbare indicator in de pagina (badge, balk of rand; kleur, positie en tekst naar keuze) zodat je nooit vergeet dat je op de testserver zit.
 - Wildcards (*.voorbeeld.nl), IP's per regel aanpassen, alles tegelijk wisselen, aan/uit met Alt+Shift+H.
 - Deel je regels als gewone tekst in hosts-formaat.
 - Open met één klik een apart testvenster met dezelfde regels, of kopieer het commando (macOS, Windows en Linux).
@@ -38,7 +39,8 @@ Gemaakt door BijBijker – https://bijbijker.nl
 Host Override maps domains to another IP address, in your regular Chrome profile only. Ideal for checking a website on a staging or new server without editing your hosts file.
 
 - Compare live and test side by side: normal window = test server, incognito = live site.
-- See which IP the current site runs on, with a TEST badge on tabs with an override.
+- See which IP the current site runs on and whether it is the live IP: detects your own rules, your hosts file (read only, macOS/Windows/Linux) and an IP that differs from public DNS.
+- Configurable on-page indicator (badge, bar or border; your choice of colour, position and text) so you never forget you are on the test server.
 - Wildcards (*.example.com), per-rule IPs, switch all at once, toggle with Alt+Shift+H.
 - Share your rules as plain text in hosts-file format.
 - One click opens a separate test window with the same rules, or copy the command (macOS, Windows, Linux).
@@ -53,22 +55,22 @@ Privacy: no account, no tracking, no analytics. Rules and settings stay on your 
 Made by BijBijker – https://bijbijker.nl
 
 ## Single purpose (veld "Doel met één functie")
-NL: Websites testen op een andere server door domeinen, alleen in het gewone Chrome-profiel, naar een zelfgekozen IP-adres te sturen, met hulpmiddelen om live en test te vergelijken (huidig IP, DNS-check).
-EN: Test websites on another server by routing chosen domains to a user-specified IP address in the regular Chrome profile only, with tools to compare live and test (current IP, DNS check).
+NL: Websites testen op een andere server door domeinen, alleen in het gewone Chrome-profiel, naar een zelfgekozen IP-adres te sturen, met hulpmiddelen om live en test te vergelijken en te herkennen (huidig IP, hosts-bestand, DNS-check, indicator in de pagina).
+EN: Test websites on another server by routing chosen domains to a user-specified IP address in the regular Chrome profile only, with tools to compare and recognise live and test (current IP, hosts file, DNS check, on-page indicator).
 
 ## Rechtvaardiging per toestemming (Engels invullen in het dashboard)
 | Toestemming | Rechtvaardiging (EN) |
 | --- | --- |
 | `proxy` | Sets a PAC proxy rule for the regular profile only, so that only the domains the user added are routed via the local helper (127.0.0.1) to the IP the user entered. All other traffic goes DIRECT. This is the core function. |
-| `storage` | Stores the user's rules and settings locally (chrome.storage.local), the random secret key shared with the local helper, and per-tab IP info for the session (chrome.storage.session). |
+| `storage` | Stores the user's rules and settings (including the on-page indicator settings) locally (chrome.storage.local), the random secret key shared with the local helper, and per-tab IP info plus cached DNS answers for the session (chrome.storage.session). |
 | `alarms` | Once per minute checks whether the local helper is running and re-sends the rules, so the extension recovers after the helper restarts. |
-| `webRequest` | Reads only the server IP of main-frame requests (onCompleted) to show which IP the current site runs on and to mark tabs with an active override. Only works after the user grants optional host access via "Enable IP display". Nothing is blocked, modified, stored outside the browser or sent anywhere. |
+| `webRequest` | Reads only the server IP of main-frame requests (onCompleted) to show which IP the current site runs on and whether it is the live IP (Host Override rule, the user's hosts file via the local helper, or different from public DNS), and to mark such tabs. Only works after the user grants optional host access via "Enable IP display". Nothing is blocked, modified, stored outside the browser or sent anywhere. |
 | `activeTab` | Reads the URL of the active tab when the user opens the popup or presses the shortcut, to show the current domain and reload it after a rule change. |
-| `scripting` | Shows a small "TEST <ip>" label on pages that are served by the test server (only with IP display enabled; can be turned off). Injects a self-contained function, no remote code. |
+| `scripting` | Shows a small, user-configurable indicator (badge, bar or border, e.g. "TEST · <ip>") in the top frame of pages that are not served from their live IP (only with IP display enabled; can be turned off). Injects a self-contained bundled function into a closed shadow root using textContent only; no remote code, page content is not read. |
 | `sidePanel` | Lets the user open the same interface in Chrome's side panel. |
 | Host `http://127.0.0.1:8899/*` | Communication with the local helper program on the user's own computer. |
-| Host `https://cloudflare-dns.com/*` | Optional live-IP lookup via DNS-over-HTTPS, only when the user clicks "Look up". |
-| Optional host `<all_urls>` | Requested at runtime only (button "Enable IP display") to read the IP of the main frame via webRequest and to show the TEST label. Not requested at install. |
+| Host `https://cloudflare-dns.com/*` | Live-IP lookup via DNS-over-HTTPS (A and AAAA) to compare with the connected IP: when the user clicks "Look up", or automatically per visited page only if the user turns on the (default off, clearly labelled) option "When the IP differs from public DNS". |
+| Optional host `<all_urls>` | Requested at runtime only (button "Enable IP display", also offered in the indicator settings) to read the IP of the main frame via webRequest and to show the on-page indicator. Not requested at install. |
 
 ## Remote code
 Antwoord: **Nee, geen remote code.** Alle JavaScript zit in het pakket. Geen `eval`, geen `new Function`, geen externe scripts. De PAC-regel wordt lokaal opgebouwd uit gevalideerde domeinnamen (alleen a-z, 0-9, `-`, `.` en `*.`). De helper (`helper/proxy.js`, `helper/dnstools.js`) zit in het pakket; het setup-commando wordt uit die meegeleverde bestanden samengesteld en door de gebruiker zelf in de terminal geplakt. De extensie voert zelf niets uit op het systeem en downloadt niets.
@@ -76,14 +78,19 @@ Antwoord: **Nee, geen remote code.** Alle JavaScript zit in het pakket. Geen `ev
 Toelichting voor de reviewer (veld "Opmerkingen" of in de beschrijving):
 > This extension requires a small local helper (Node.js) because Chrome extensions cannot map hostnames to IP addresses. The helper source is bundled in the package (`helper/`), shown to the user before they copy it, and installed by the user themselves. It listens on 127.0.0.1 only and does not contact the developer.
 >
-> How setup and authentication work: on first run the extension generates a random 32-byte secret (`crypto.getRandomValues`) and keeps it in `chrome.storage.local`. The setup command shown on the welcome page / popup is assembled locally from the bundled helper files plus a `config.json` containing the extension ID and that secret; the user pastes it into Terminal/PowerShell, which writes `~/.host-override/` (directory 0700, files 0600 on macOS/Linux) and registers the helper to start at login (LaunchAgent / systemd user service / Startup folder). Every control request (`/__rules`, `/__launch`, `/__dns`, `/__trace`, `/__check`) carries the secret in an `X-Host-Override-Token` header; the helper compares it in constant time and additionally checks the Origin (this extension's ID) and Host header (127.0.0.1/localhost, against DNS rebinding). Without a valid config the helper rejects every control request. Before sending anything, the extension sends a random nonce to `/__status` and verifies via WebCrypto that the helper answers with HMAC-SHA256(secret, nonce); if not (e.g. another program on port 8899), it shows a warning and sends no rules or traffic there. In the side panel, the DNS check runs automatically for the active tab's domain while the DNS tab is open (disclosed in the privacy policy).
+> How setup and authentication work: on first run the extension generates a random 32-byte secret (`crypto.getRandomValues`) and keeps it in `chrome.storage.local`. The setup command shown on the welcome page / popup is assembled locally from the bundled helper files plus a `config.json` containing the extension ID and that secret; the user pastes it into Terminal/PowerShell, which writes `~/.host-override/` (directory 0700, files 0600 on macOS/Linux) and registers the helper to start at login (LaunchAgent / systemd user service / Startup folder). Every control request (`/__rules`, `/__launch`, `/__dns`, `/__trace`, `/__check`, `/__hosts`) carries the secret in an `X-Host-Override-Token` header; the helper compares it in constant time and additionally checks the Origin (this extension's ID) and Host header (127.0.0.1/localhost, against DNS rebinding). Without a valid config the helper rejects every control request. Before sending anything, the extension sends a random nonce to `/__status` and verifies via WebCrypto that the helper answers with HMAC-SHA256(secret, nonce); if not (e.g. another program on port 8899), it shows a warning and sends no rules or traffic there. In the side panel, the DNS check runs automatically for the active tab's domain while the DNS tab is open (disclosed in the privacy policy).
+>
+> Hosts file: `/__hosts` lets the helper read the system hosts file (`/etc/hosts`, or `%SystemRoot%\System32\drivers\etc\hosts` on Windows) read-only, capped at 5 MB, and return only the entries for the requested host names (or a compact overview for the "More" tab). The path is fixed in the helper and cannot be chosen by the extension; nothing is written and nothing leaves the computer. No new permissions were added for this.
+>
+> On-page indicator: injected with `chrome.scripting.executeScript` (bundled function, top frame only, only on http(s) pages with the optional host access) into a closed shadow root, text via `textContent`, `pointer-events: none` except the optional dismiss target.
 >
 > Test instructions: load the extension, follow the welcome page (copy the setup command, paste in Terminal), add a rule such as `example.com` → `93.184.215.14`.
 
 ## Gegevensgebruik (formulier "Privacypraktijken")
 - Verzamelde gegevens: **geen van de categorieën aanvinken.** De extensie verzamelt en verstuurt geen gegevens naar de maker of derden.
   - Websitecontent/webgeschiedenis: niet verzameld. Het IP van de hoofdpagina wordt alleen lokaal getoond (chrome.storage.session).
-  - De hostnaam gaat alleen naar Cloudflare DNS als de gebruiker op "Opzoeken" klikt; dat is een door de gebruiker gestarte functie, geen verzameling door de ontwikkelaar.
+  - De hostnaam gaat alleen naar Cloudflare DNS als de gebruiker op "Opzoeken" klikt, of per bezochte pagina als de gebruiker zelf de optie "Als het IP afwijkt van publieke DNS" aanzet (standaard uit, bij de optie uitgelegd). Dat is een door de gebruiker gekozen functie, geen verzameling door de ontwikkelaar; het staat in het privacybeleid.
+  - Hosts-bestand: wordt lokaal door de helper gelezen (alleen lezen) en alleen in de extensie getoond; er gaat niets van de computer af.
   - De DNS-check (via de lokale helper; in het zijpaneel automatisch voor het domein van de actieve tab zolang de tab DNS-check open staat) stuurt domeinnamen naar openbare DNS-servers en doet `GET /` naar de IP's van dat domein. Dat is functionaliteit op de computer van de gebruiker, geen verzameling door de ontwikkelaar; het staat in het privacybeleid.
 - Vink de drie verklaringen aan: geen verkoop aan derden, geen gebruik buiten de kernfunctie, geen gebruik voor kredietwaardigheid.
 - Privacybeleid-URL: openbare URL van `store/PRIVACY.md` (zie hieronder).
@@ -97,6 +104,7 @@ Alle bestanden zijn 24-bit PNG zonder alfakanaal, opgebouwd uit echte schermen v
 | `screenshot-2-dns-{nl,en}.png` | 1280x800 | DNS-check |
 | `screenshot-3-more-{nl,en}.png` | 1280x800 | Testvenster + delen |
 | `screenshot-4-welcome-{nl,en}.png` | 1280x800 | Eenmalige installatie helper |
+| `screenshot-5-indicator-{nl,en}.png` | 1280x800 | Indicator in de pagina + herkenning via hosts-bestand |
 | `promo-small-440x280-{nl,en}.png` | 440x280 | Kleine promotegel |
 | `marquee-1400x560-{nl,en}.png` | 1400x560 | Marquee-promotegel |
 
@@ -105,7 +113,8 @@ Upload de NL-set bij de Nederlandse vermelding en de EN-set bij de Engelse (in h
 ## Checklist voor publicatie
 - [x] Manifest V3, versie 1.7.0, `homepage_url` = https://bijbijker.nl
 - [x] Naam ≤ 75 en korte beschrijving ≤ 132 tekens, NL en EN
-- [x] `_locales/en` en `_locales/nl` compleet (naam, omschrijving, sneltoets, TEST-label)
+- [x] `_locales/en` en `_locales/nl` compleet (naam, omschrijving, sneltoets); overige teksten NL/EN via `strings.en.js`
+- [x] Geen nieuwe permissies voor hosts-bestand en indicator (zelfde `webRequest`, `scripting`, optioneel `<all_urls>`)
 - [x] Iconen 16/32/48/128, 128 met transparante rand
 - [x] Alle permissies gebruikt en gerechtvaardigd; `<all_urls>` alleen optioneel en op klik
 - [x] Geen remote code, geen eval; `node --check` op alle JS (zit in `package.sh`)

@@ -14,7 +14,7 @@ const { spawn } = require("child_process");
 let tools = null; // DNS-tools (dnstools.js), optioneel naast proxy.js
 try { tools = require("./dnstools.js"); } catch { /* oudere installatie: DNS-pagina meldt dat een update nodig is */ }
 
-const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__status
+const HELPER_VERSION = 6; // 6: gedeeld geheim (token) + HMAC-bewijs in /__status, /__hosts (hosts-bestand lezen)
 const PORT = Number(process.env.PORT || 8899);
 const DIR = path.join(os.homedir(), ".host-override");
 const FILE = path.join(DIR, "rules.json");
@@ -231,6 +231,46 @@ function dnsApi(req, res) {
   });
 }
 
+// ---------- Hosts-bestand (alleen lezen) ----------
+// GET /__hosts?names=a.nl,b.nl -> alleen de treffers voor die namen (max 50).
+// GET /__hosts                 -> compact overzicht (overrides, aantal blokkeringen).
+// POST met {"names": [...]} (of {} voor het overzicht) doet hetzelfde; de extensie gebruikt POST, omdat Chrome
+// bij GET vanuit een extensie geen Origin-header meestuurt. Zelfde controles als de andere opdrachten (geheim, Origin, Host).
+// Het pad is vast (/etc/hosts of %SystemRoot%\System32\drivers\etc\hosts); de extensie kan het niet kiezen.
+const HOSTS_NAME_RE = /^(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*$/;
+function parseNames(list) {
+  if (list == null) return null;
+  if (!Array.isArray(list) || list.length > 50) throw new Error("ongeldige namen");
+  const out = [];
+  for (const raw of list) {
+    const n = String(raw).trim().toLowerCase().replace(/\.$/, "");
+    if (n.length > 253 || !HOSTS_NAME_RE.test(n)) throw new Error("ongeldige naam");
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+function hostsApi(req, res) {
+  const reply = (code, obj) => res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(obj));
+  if (!fromExtension(req)) return deny(res);
+  if (!tools || !tools.hosts) return reply(501, { error: "hosts-tools ontbreken, werk de helper bij" });
+  const run = async (names) => {
+    try { reply(200, await tools.hosts(parseNames(names))); }
+    catch (e) { reply(400, { error: e.message }); }
+  };
+  if (req.method === "GET") {
+    const q = new URL(req.url, "http://x").searchParams.get("names");
+    return run(q == null ? null : q.split(",").filter(Boolean));
+  }
+  if (req.method !== "POST") return reply(405, { error: "GET of POST verwacht" });
+  let body = "";
+  req.on("data", (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+  req.on("end", () => {
+    let d;
+    try { d = JSON.parse(body || "{}"); } catch { return reply(400, { error: "ongeldige invoer" }); }
+    run(d.names);
+  });
+}
+
 // Status zonder token: versie, of er een geldige config is, en een bewijs dat deze helper het geheim kent.
 // De extensie stuurt een willekeurige nonce en controleert proof = HMAC-SHA256(geheim, "host-override/status:" + nonce)
 // voordat ze het geheim of regels stuurt. Een ander programma op poort 8899 kan dat bewijs niet leveren.
@@ -253,6 +293,7 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith("/__rules")) return control(req, res);
   if (req.url.startsWith("/__launch")) return launch(req, res);
   if (Object.hasOwn(DNS_API, req.url.split("?")[0])) return dnsApi(req, res);
+  if (req.url.split("?")[0] === "/__hosts") return hostsApi(req, res);
   // Eigen pagina's (geen proxy-verzoek): alleen via 127.0.0.1/localhost, niet via een herbonden domeinnaam.
   if (req.url.startsWith("/") && !localHost(req)) { res.writeHead(403).end("forbidden"); return; }
   if (req.url.split("?")[0] === "/__status") return status(req, res);

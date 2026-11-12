@@ -3,6 +3,8 @@ import {
   OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch,
 } from "./common.js";
 import { initI18n, t } from "./i18n.js";
+import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
+import { COLORS, INDICATOR_DEFAULTS, normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
 
 const langPref = await initI18n();
 const { checkDomain } = await import("./dns.js");
@@ -115,30 +117,77 @@ async function getTab() {
   return null;
 }
 
+// Treffers uit het hosts-bestand voor de huidige site (via de helper, lokaal). null = onbekend.
+let siteHosts = { host: null, v: null, done: false };
+let siteSeen = null; // verbonden IP van de huidige site (voor de melding na "Opzoeken")
+async function fetchSiteHosts(host) {
+  if (siteHosts.host === host && siteHosts.done) return;
+  siteHosts = { host, v: null, done: false };
+  const v = await hostsLookup(host);
+  if (siteHosts.host !== host) return;
+  siteHosts = { host, v, done: true };
+  render(false);
+}
+
 async function renderSite(state) {
   $("site").hidden = !tab;
   if (!tab) return;
   $("siteHost").textContent = tab.host;
   const rule = matchRule(activeRules(state), tab.host);
-  const key = `tab:${tab.id}`, liveKey = `live:${tab.host}`;
-  const store = await chrome.storage.session.get([key, liveKey]);
-  const rec = store[key];
-  const seen = rec && rec.host === tab.host && rec.ip && rec.ip !== "127.0.0.1" ? rec.ip : null;
-  // Het door Chrome gezien IP is alleen "live" als er geen override actief is.
-  if (!rule && seen && store[liveKey] !== seen) await chrome.storage.session.set({ [liveKey]: seen });
-  const live = (!rule && seen) || store[liveKey] || null;
+  const key = `tab:${tab.id}`, liveKey = `live:${tab.host}`, dohKey = `doh:${tab.host}`;
+  const store = await chrome.storage.session.get([key, liveKey, dohKey]);
+  const rec = store[key]?.host === tab.host ? store[key] : null;
+  // Met een regel loopt het verkeer via de lokale helper (127.0.0.1): dat is niet het IP van de server.
+  const seen = rec?.ip && !(rule && rec.ip === "127.0.0.1") ? rec.ip : null;
+  siteSeen = seen;
+  const doh = store[dohKey]?.exp > Date.now() ? store[dohKey] : null;
+  if (!rule && siteHosts.host !== tab.host) fetchSiteHosts(tab.host);
+  const hosts = siteHosts.host === tab.host && siteHosts.done ? siteHosts.v : rec?.result?.entries?.length ? rec.result.entries : null;
+  const r = classify({ ip: seen, rule, hosts, doh });
+  if (r.source === "live" && store[liveKey] !== r.ip) await chrome.storage.session.set({ [liveKey]: r.ip });
   const granted = await chrome.permissions.contains(ALL_SITES);
 
   const pill = $("siteKind");
-  if (rule) { pill.textContent = t("Override naar {ip}", { ip: rule.ip }); pill.className = "pill override"; }
-  else { pill.textContent = t("Live"); pill.className = "pill live"; }
+  const P = {
+    rule: [t("Override naar {ip}", { ip: r.ip }), "override"],
+    hosts: [t("Hosts-bestand: {ip}", { ip: r.ip }), "hosts"],
+    differs: r.near ? [t("Wijkt licht af"), "near"] : [t("Wijkt af van DNS"), "differs"],
+    live: [t("Live"), "live"],
+    unknown: [t("Geen regel"), "neutral"],
+  }[r.source];
+  pill.textContent = P[0];
+  pill.className = "pill " + P[1];
 
-  $("liveIp").textContent = live || (granted && !rule ? t("Ververs de pagina") : "-");
+  // Verbonden: het IP waar Chrome mee praat. Live IP: wat publieke DNS zegt.
+  $("connIp").textContent = rule ? t("{ip} (via de helper)", { ip: rule.ip }) : seen || (granted ? t("Ververs de pagina") : "-");
+  const pub = doh?.status === "ok" ? doh.ips : null;
+  const live = pub ? pub[0] : store[liveKey] || null;
+  $("liveIp").textContent = pub ? (pub.length > 1 ? `${pub[0]} +${pub.length - 1}` : pub[0]) : doh ? t("niet in publieke DNS") : live || "-";
+  $("liveIp").title = pub ? pub.join(", ") : "";
   $("copyIp").hidden = !live;
   $("copyIp").onclick = () => copy(live, $("copyIp"));
-  $("lookupBtn").hidden = !!live;
+  $("lookupBtn").hidden = !!doh;
+
+  // Uitleg: zeker (regel, hosts-bestand) of een vermoeden (wijkt af van publieke DNS).
+  const note = $("srcNote");
+  let text = "";
+  if (r.source === "rule") text = t("Bron: Host Override-regel. Alleen dit Chrome-profiel; incognito toont de live site.");
+  else if (r.source === "hosts") {
+    text = t("Staat in je hosts-bestand: {ip}. Deze computer gebruikt niet het live IP, ook niet in incognito of andere browsers.", { ip: r.ip });
+    if (r.mismatch && r.connected) text += " " + t("Chrome is wel verbonden met {ip} (proxy of VPN?).", { ip: r.connected });
+  } else if (r.source === "differs") {
+    const pubList = r.publicIps.slice(0, 3).join(", ");
+    if (!r.publicIps.length) text = t("{host} staat niet in publieke DNS, maar Chrome is verbonden met {ip}: lokale DNS, VPN of hosts-bestand.", { host: tab.host, ip: r.connected });
+    else if (r.near) text = t("Verbonden met {ip}; publieke DNS geeft {pub}. Zelfde netwerkblok, dus waarschijnlijk een CDN of geo-DNS.", { ip: r.connected, pub: pubList });
+    else text = t("Wijkt af van publieke DNS: verbonden met {ip}, publieke DNS geeft {pub}. Mogelijk hosts-bestand, lokale DNS, VPN of proxy (of een CDN die per regio antwoordt).", { ip: r.connected, pub: pubList });
+    if (hosts === null) text += " " + t("Koppel de helper om je hosts-bestand zeker te controleren.");
+  } else if (r.source === "live") text = t("Komt overeen met publieke DNS.");
+  note.hidden = !text;
+  note.textContent = text;
+  note.className = "srcNote " + r.source;
+
   $("permBtn").hidden = granted;
-  $("useBtn").hidden = !!rule || !!state.rules.find((r) => r.host === tab.host);
+  $("useBtn").hidden = !!rule || !!state.rules.find((x) => x.host === tab.host);
   $("useBtn").onclick = () => {
     $("host").value = tab.host;
     $("ip").value = state.lastIp || "";
@@ -154,25 +203,14 @@ $("permBtn").onclick = async () => {
   }
 };
 
-async function dnsLookup(host) {
-  const ask = async (type) => {
-    const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`, { headers: { accept: "application/dns-json" } });
-    const j = await r.json();
-    return (j.Answer || []).filter((a) => a.type === (type === "A" ? 1 : 28)).map((a) => a.data);
-  };
-  let ips = await ask("A");
-  if (!ips.length) ips = await ask("AAAA");
-  return ips;
-}
-
+// Alleen op klik: de hostnaam gaat naar Cloudflare DNS (A en AAAA). Daarna vergelijken met het verbonden IP.
 $("lookupBtn").onclick = async () => {
   if (!tab) return;
   $("dnsOut").textContent = t("Zoeken...");
   try {
-    const ips = await dnsLookup(tab.host);
-    if (!ips.length) { $("dnsOut").textContent = t("Geen DNS-record gevonden."); return; }
-    await chrome.storage.session.set({ [`live:${tab.host}`]: ips[0] });
-    $("dnsOut").textContent = ips.length > 1 ? t("Live IP's: {ips}", { ips: ips.slice(0, 4).join(", ") }) : "";
+    const d = await dohLookup(tab.host, { cache: false });
+    $("dnsOut").textContent = d.status === "ok" || siteSeen ? "" : t("Geen DNS-record gevonden.");
+    try { await chrome.runtime.sendMessage({ type: "ho-reevaluate", tabId: tab.id }); } catch { /* achtergrond slaapt */ }
     render(false);
   } catch {
     $("dnsOut").textContent = t("Opzoeken mislukt (offline?).");
@@ -194,7 +232,6 @@ async function render(refresh = true) {
   const state = await load();
   $("master").checked = state.enabled;
   $("autoReload").checked = state.autoReload;
-  $("pageBadge").checked = state.pageBadge;
   $("sideDefault").checked = state.sideDefault;
   $("empty").hidden = state.rules.length > 0;
   $("bulk").hidden = state.rules.length < 2;
@@ -253,6 +290,7 @@ async function render(refresh = true) {
   });
   await renderSite(state);
   if (!$("viewMore").hidden) {
+    renderIndicator();
     renderCommand(state.rules);
     if (document.activeElement !== $("hostsText")) $("hostsText").value = formatHosts(state.rules);
   }
@@ -262,7 +300,6 @@ async function render(refresh = true) {
 $("master").onchange = () => update({ enabled: $("master").checked });
 $("filter").oninput = () => render(false);
 $("autoReload").onchange = () => chrome.storage.local.set({ autoReload: $("autoReload").checked });
-$("pageBadge").onchange = () => chrome.storage.local.set({ pageBadge: $("pageBadge").checked });
 $("sideDefault").onchange = () => chrome.storage.local.set({ sideDefault: $("sideDefault").checked });
 
 $("add").onsubmit = async (e) => {
@@ -337,6 +374,178 @@ $("applyHosts").onclick = async () => {
   update({ rules: [...map.values()], enabled: true });
 };
 
+// --- Indicator in de pagina ---
+const POS = {
+  badge: [["bl", "Linksonder"], ["br", "Rechtsonder"], ["tl", "Linksboven"], ["tr", "Rechtsboven"]],
+  bar: [["top", "Boven"], ["bottom", "Onder"]],
+};
+const COLOR_NAMES = { "#c2410c": "Oranje", "#c92a2a": "Rood", "#6741d9": "Paars", "#1971c2": "Blauw", "#2b8a3e": "Groen", "#1c1c1e": "Zwart" };
+let ind = { ...INDICATOR_DEFAULTS };
+
+async function renderIndicator() {
+  const st = await chrome.storage.local.get(["pageBadge", "indicator"]);
+  const master = st.pageBadge !== false;
+  ind = normIndicator(st.indicator);
+  const granted = await chrome.permissions.contains(ALL_SITES);
+  $("pageBadge").checked = master;
+  $("indPerm").hidden = granted || !master;
+  $("indOpts").classList.toggle("off", !master);
+  $("indOnRule").checked = ind.onRule;
+  $("indOnHosts").checked = ind.onHosts;
+  $("indOnDiffers").checked = ind.onDiffers;
+  $("indStyle").value = ind.style;
+  const posList = ind.style === "bar" ? POS.bar : POS.badge;
+  $("indPos").replaceChildren(...posList.map(([v, l]) => { const o = document.createElement("option"); o.value = v; o.textContent = t(l); return o; }));
+  $("indPos").value = ind.style === "bar" ? ind.edge : ind.corner;
+  $("indSize").value = ind.size;
+  $("indOpacity").value = String(ind.opacity);
+  $("indOpacityVal").textContent = ind.opacity + "%";
+  if (document.activeElement !== $("indText")) $("indText").value = ind.text;
+  $("indShowIp").checked = ind.showIp;
+  $("indHideHover").checked = ind.hideHover;
+  $("indDismiss").checked = ind.dismiss;
+  const sw = $("indColors");
+  if (!sw.childElementCount) {
+    for (const c of COLORS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch";
+      b.dataset.color = c;
+      b.style.background = c;
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-label", t(COLOR_NAMES[c]));
+      b.title = t(COLOR_NAMES[c]);
+      b.onclick = () => saveIndicator({ color: c });
+      sw.append(b);
+    }
+    const custom = document.createElement("input");
+    custom.type = "color";
+    custom.id = "indCustom";
+    custom.title = t("Eigen kleur");
+    custom.setAttribute("aria-label", t("Eigen kleur"));
+    custom.oninput = () => previewIndicator({ ...ind, color: custom.value });
+    custom.onchange = () => saveIndicator({ color: custom.value });
+    sw.append(custom);
+  }
+  for (const b of sw.querySelectorAll(".swatch")) b.setAttribute("aria-checked", String(b.dataset.color === ind.color));
+  $("indCustom").value = ind.color;
+  previewIndicator(ind);
+}
+
+function previewIndicator(cfg) {
+  const ip = "203.0.113.10";
+  drawIndicator({
+    ...cfg, fg: textColor(cfg.color),
+    text: renderLabel(cfg.text, { ip, host: tab?.host || t("voorbeeld.nl"), source: "Host Override" }, cfg.showIp),
+  }, $("indPreview"));
+}
+
+async function saveIndicator(patch) {
+  ind = normIndicator({ ...ind, ...patch });
+  await chrome.storage.local.set({ indicator: ind }); // de achtergrond werkt open tabs direct bij
+  renderIndicator();
+}
+$("pageBadge").onchange = async () => { await chrome.storage.local.set({ pageBadge: $("pageBadge").checked }); renderIndicator(); };
+for (const [id, k] of [["indOnRule", "onRule"], ["indOnHosts", "onHosts"], ["indOnDiffers", "onDiffers"], ["indShowIp", "showIp"], ["indHideHover", "hideHover"], ["indDismiss", "dismiss"]]) {
+  $(id).onchange = () => saveIndicator({ [k]: $(id).checked });
+}
+$("indStyle").onchange = () => saveIndicator({ style: $("indStyle").value });
+$("indPos").onchange = () => saveIndicator(ind.style === "bar" ? { edge: $("indPos").value } : { corner: $("indPos").value });
+$("indSize").onchange = () => saveIndicator({ size: $("indSize").value });
+$("indOpacity").oninput = () => { $("indOpacityVal").textContent = $("indOpacity").value + "%"; previewIndicator({ ...ind, opacity: Number($("indOpacity").value) }); };
+$("indOpacity").onchange = () => saveIndicator({ opacity: Number($("indOpacity").value) });
+let textTimer = 0;
+$("indText").oninput = () => {
+  previewIndicator({ ...ind, text: $("indText").value });
+  clearTimeout(textTimer);
+  textTimer = setTimeout(() => saveIndicator({ text: $("indText").value }), 400);
+};
+$("indPermBtn").onclick = async () => {
+  if (await chrome.permissions.request(ALL_SITES)) {
+    if (tab) await chrome.tabs.reload(tab.id);
+    renderIndicator();
+  }
+};
+
+// --- Hosts-bestand (alleen lezen, via de helper) ---
+let hostsData = null;
+function hostsRules() {
+  if (!hostsData) return [];
+  const out = [];
+  for (const e of hostsData.entries) for (const n of e.names) if (isHost(n) && isIp(e.ip)) out.push({ host: n, ip: e.ip });
+  return out;
+}
+function renderHostsList() {
+  const list = $("hostsList");
+  list.textContent = "";
+  if (!hostsData) return;
+  const only = $("hostsOnly").checked;
+  const rows = only ? hostsData.entries : [...hostsData.entries, ...hostsData.blockedSample];
+  for (const e of rows) {
+    const r = document.createElement("div");
+    r.className = "hrow";
+    const ip = document.createElement("span");
+    ip.className = "mono";
+    ip.textContent = e.ip;
+    if (e.kind !== "override") {
+      const k = document.createElement("span");
+      k.className = "k";
+      k.textContent = e.kind === "blocked" ? t("blokkade") : t("lokaal");
+      ip.append(k);
+    }
+    const names = document.createElement("span");
+    names.className = "names";
+    names.textContent = e.names.join(" ");
+    r.append(ip, names);
+    list.append(r);
+  }
+  if (!only && hostsData.blocked > hostsData.blockedSample.reduce((a, l) => a + l.names.length, 0)) {
+    const more = document.createElement("div");
+    more.className = "small";
+    more.textContent = t("…en meer geblokkeerde namen ({n} in totaal).", { n: hostsData.blocked });
+    list.append(more);
+  }
+}
+async function loadHostsFile() {
+  $("hostsMsg").textContent = "";
+  $("hostsMeta").textContent = t("Laden...");
+  try {
+    hostsData = await hostsOverview();
+  } catch (e) {
+    hostsData = null;
+    const msg = { "helper-missing": t("De helper draait niet."), "helper-outdated": t("De helper moet worden bijgewerkt."), "helper-setup": t("Helper moet opnieuw worden ingesteld") }[e.message] || e.message;
+    $("hostsMeta").textContent = t("Het hosts-bestand wordt gelezen door de helper. {e}", { e: msg });
+  }
+  if (hostsData) {
+    const d = hostsData;
+    const n = d.entries.reduce((a, l) => a + l.names.length, 0);
+    let meta = !d.exists ? t("Geen hosts-bestand gevonden ({path}).", { path: d.path })
+      : (n ? t("{path}: {n} naam/namen met een eigen IP.", { path: d.path, n }) : t("{path}: geen overrides.", { path: d.path }));
+    if (d.blocked) meta += " " + t("{n} geblokkeerd (0.0.0.0 e.d.).", { n: d.blocked });
+    if (d.truncated) meta += " " + t("Bestand groter dan {mb} MB: alleen het begin is gelezen.", { mb: Math.round(d.max / 1048576) });
+    if (d.entriesTruncated) meta += " " + t("Alleen de eerste 1000 regels getoond.");
+    $("hostsMeta").textContent = meta;
+  }
+  const has = hostsRules().length > 0;
+  $("hostsCopy").disabled = !has;
+  $("hostsImport").disabled = !has;
+  $("hostsOnly").parentElement.hidden = !hostsData?.blocked;
+  renderHostsList();
+}
+$("hostsOnly").onchange = renderHostsList;
+$("hostsLoad").onclick = loadHostsFile;
+$("hostsCopy").onclick = () => copy(formatHosts(hostsRules()), $("hostsCopy"));
+$("hostsImport").onclick = async () => {
+  const incoming = hostsRules();
+  const { rules } = await load();
+  const have = new Set(rules.map((r) => r.host));
+  const add = incoming.filter((r) => !have.has(r.host)).map((r) => ({ ...r, enabled: true }));
+  $("hostsMsg").textContent = add.length
+    ? t("{n} regel(s) toegevoegd aan Host Override. Je hosts-bestand blijft ongewijzigd.", { n: add.length })
+    : t("Alles staat al in Host Override.");
+  if (add.length) update({ rules: [...rules, ...add], enabled: true });
+};
+
 // --- Taal ---
 $("langSel").value = langPref;
 $("langSel").onchange = async () => {
@@ -363,7 +572,7 @@ function showView(name) {
     $(tabId).setAttribute("aria-selected", String(on));
     $(tabId).tabIndex = on ? 0 : -1;
   }
-  if (name === "more") render(false);
+  if (name === "more") { render(false); loadHostsFile(); }
   if (name === "dns") { if (tab) autoDns(); else $("dDomain").focus(); }
 }
 for (const [key, [tabId]] of Object.entries(VIEWS)) $(tabId).onclick = () => showView(key);

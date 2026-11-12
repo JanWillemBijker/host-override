@@ -8,6 +8,8 @@ export function resolveLang(pref) {
   return String(navigator.language || "en").toLowerCase().startsWith("nl") ? "nl" : "en";
 }
 export const getLang = () => lang;
+// Voor het achtergrondscript (geen document): taal zetten zonder de DOM te vertalen.
+export function setLang(l) { lang = l === "en" ? "en" : "nl"; }
 
 export function t(nl, vars) {
   let s = lang === "en" ? (EN[nl] ?? nl) : nl;

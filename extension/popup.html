@@ -54,11 +54,16 @@
         <span id="siteKind" class="pill"></span>
       </div>
       <div class="liveRow">
+        <span class="label">Verbonden</span>
+        <code id="connIp">-</code>
+      </div>
+      <div class="liveRow">
         <span class="label">Live IP</span>
         <code id="liveIp">-</code>
         <button id="copyIp" class="mini" title="Kopieer IP" hidden>Kopieer</button>
         <button id="lookupBtn" class="mini" title="Vraagt het live IP op via Cloudflare DNS-over-HTTPS (stuurt de hostnaam naar Cloudflare)">Opzoeken</button>
       </div>
+      <div id="srcNote" class="srcNote" hidden></div>
       <div id="dnsOut" class="small"></div>
       <div class="row wrap">
         <button id="useBtn" class="secondary" hidden>Overschrijf dit domein</button>
@@ -98,6 +103,7 @@
     <div id="dResults" class="secs" hidden>
       <details id="dSummary" class="sec" data-title="Samenvatting"><summary><span class="sdot"></span><span class="stitle">Samenvatting</span><span class="ssub"></span></summary><div class="body"></div><div class="row"><button id="dCopy" class="secondary">Kopieer rapport voor ticket</button></div></details>
       <details id="dRecords" class="sec" data-title="Records"><summary><span class="sdot"></span><span class="stitle">Records</span><span class="ssub"></span></summary><div class="body"></div></details>
+      <details id="dHosts" class="sec" data-title="Hosts-bestand"><summary><span class="sdot"></span><span class="stitle">Hosts-bestand</span><span class="ssub"></span></summary><div class="body"></div></details>
       <details id="dNs" class="sec" data-title="Nameservers"><summary><span class="sdot"></span><span class="stitle">Nameservers</span><span class="ssub"></span></summary><div class="body"></div></details>
       <details id="dProp" class="sec" data-title="Resolvers vergelijken"><summary><span class="sdot"></span><span class="stitle">Resolvers vergelijken</span><span class="ssub"></span></summary><div class="body"></div></details>
       <details id="dSrv" class="sec" data-title="Servers: live en test"><summary><span class="sdot"></span><span class="stitle">Servers: live en test</span><span class="ssub"></span></summary>
@@ -118,9 +124,72 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" id="autoReload"> Tab automatisch herladen na een wijziging</label>
-      <label class="check"><input type="checkbox" id="pageBadge"> Toon een TEST-label in de pagina zelf (vereist IP-weergave)</label>
       <label class="check"><input type="checkbox" id="sideDefault"> Open altijd als zijpaneel</label>
       <p class="small" data-th>Sneltoets: Alt+Shift+H zet alles aan of uit. <a href="welcome.html" target="_blank">Installatie-uitleg</a></p>
+    </section>
+
+    <section id="indCard" class="card">
+      <span class="label">Indicator in de pagina</span>
+      <label class="check"><input type="checkbox" id="pageBadge"> Toon een indicator als de site niet het live IP gebruikt</label>
+      <div id="indPerm" class="help" hidden>
+        <span>Hiervoor is toegang tot alle sites nodig (IP-weergave). De extensie leest alleen het IP van de pagina, niet de inhoud.</span>
+        <div class="row"><button id="indPermBtn" class="secondary">IP-weergave inschakelen</button></div>
+      </div>
+      <div id="indOpts">
+        <span class="sublabel">Wanneer</span>
+        <label class="check"><input type="checkbox" id="indOnRule"> Via een Host Override-regel</label>
+        <label class="check"><input type="checkbox" id="indOnHosts"> Via je hosts-bestand (vereist de helper)</label>
+        <label class="check"><input type="checkbox" id="indOnDiffers"> Als het IP afwijkt van publieke DNS</label>
+        <p class="small indent">Stuurt dan de hostnaam van elke pagina die je opent naar Cloudflare DNS. Kan vals alarm geven bij CDN's, VPN of een proxy; afwijkingen binnen hetzelfde netwerkblok worden genegeerd.</p>
+        <div class="grid2">
+          <label class="field">Stijl
+            <select id="indStyle">
+              <option value="badge">Hoekbadge</option>
+              <option value="bar">Gekleurde balk</option>
+              <option value="frame">Rand om de pagina</option>
+            </select>
+          </label>
+          <label class="field">Positie <select id="indPos"></select></label>
+          <label class="field">Grootte
+            <select id="indSize">
+              <option value="s">Klein</option>
+              <option value="m">Normaal</option>
+              <option value="l">Groot</option>
+            </select>
+          </label>
+          <label class="field">Dekking <span id="indOpacityVal" class="small"></span>
+            <input type="range" id="indOpacity" min="30" max="100" step="5">
+          </label>
+        </div>
+        <div class="field"><span id="indColorLabel">Kleur</span>
+          <div id="indColors" class="swatches" role="radiogroup" aria-labelledby="indColorLabel"></div>
+        </div>
+        <label class="field">Tekst
+          <input id="indText" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="TEST · {ip}">
+        </label>
+        <p class="small">Gebruik {ip}, {host} en {source} (Host Override, hosts-bestand of afwijkende DNS).</p>
+        <label class="check"><input type="checkbox" id="indShowIp"> Toon het IP</label>
+        <label class="check"><input type="checkbox" id="indHideHover"> Bijna onzichtbaar als de muis erover gaat</label>
+        <label class="check"><input type="checkbox" id="indDismiss"> Klik om te verbergen (voor deze tab)</label>
+        <span class="sublabel">Voorbeeld</span>
+        <div id="indPreview" class="preview" aria-hidden="true">
+          <div class="pv-bar"></div><div class="pv-line w70"></div><div class="pv-line w90"></div><div class="pv-line w50"></div><div class="pv-line w80"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="hostsCard" class="card">
+      <span class="label">Hosts-bestand (alleen lezen)</span>
+      <p id="hostsMeta" class="small"></p>
+      <label class="check"><input type="checkbox" id="hostsOnly" checked> Alleen overrides tonen</label>
+      <div id="hostsList" class="hostsList"></div>
+      <div class="row wrap">
+        <button id="hostsLoad" class="secondary">Vernieuwen</button>
+        <button id="hostsCopy" class="secondary">Kopieer als regels</button>
+        <button id="hostsImport" class="primary mini-primary">Importeer in Host Override</button>
+      </div>
+      <div id="hostsMsg" class="small" role="status"></div>
+      <p class="small">Host Override leest dit bestand alleen (via de helper) en past het nooit aan. Bewerken kan alleen met beheerdersrechten (macOS en Linux: sudo, Windows: Kladblok als administrator). Het hosts-bestand geldt voor de hele computer, ook incognito; regels in Host Override alleen voor dit Chrome-profiel.</p>
     </section>
 
     <section id="cmdPanel" class="card">

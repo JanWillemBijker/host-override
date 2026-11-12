@@ -1,4 +1,7 @@
 import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected, getSecret, helperStatus, helperFetch } from "./common.js";
+import { classify, triggers, dohLookup, hostsLookup } from "./detect.js";
+import { normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
+import { t, setLang, resolveLang } from "./i18n.js";
 
 const PROXY = `127.0.0.1:${PORT}`;
 // Reageert er op poort 8899 iets dat zich niet als onze helper kan bewijzen (oude helper, verkeerd geheim
@@ -89,40 +92,123 @@ applyPanel();
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.enabled || changes.rules)) apply();
   if (area === "local" && changes.sideDefault) applyPanel();
+  if (area === "local" && (changes.indicator || changes.pageBadge || changes.lang)) repaintAll();
 });
 
-// Optioneel (alleen na toestemming voor alle sites): IP van de hoofdpagina per tab bewaren
-// en tabs met een override markeren met TEST.
-// Klein TEST-label onderin de pagina zelf, zodat je nooit vergeet dat je op de testserver zit.
-function pill(ip, title) {
-  const ID = "host-override-pill";
-  if (document.getElementById(ID)) { document.getElementById(ID).shadowRoot.querySelector("span").textContent = "TEST " + ip; return; }
-  const host = document.createElement("div");
-  host.id = ID;
-  const root = host.attachShadow({ mode: "closed" });
-  const s = document.createElement("span");
-  s.textContent = "TEST " + ip;
-  s.title = title;
-  s.style.cssText = "all:initial;position:fixed;left:10px;bottom:10px;z-index:2147483647;background:#c2410c;color:#fff;font:600 12px system-ui,sans-serif;padding:4px 10px;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.35);cursor:pointer;opacity:.92";
-  s.onclick = () => host.remove();
-  root.append(s);
-  document.documentElement.append(host);
+// ---------- Huidige site: live of niet? ----------
+// Optioneel (alleen na toestemming voor alle sites): IP van de hoofdpagina per tab bewaren, bepalen of dat
+// het live IP is (Host Override-regel, hosts-bestand via de helper, of afwijkend van publieke DNS) en dat
+// tonen met de badge op het icoon en, als ingesteld, een indicator in de pagina zelf.
+const ALL_SITES = { origins: ["<all_urls>"] };
+const BADGE = { rule: ["TEST", "#c2410c"], hosts: ["HOST", "#6741d9"], differs: ["DNS?", "#9c4a00"] };
+
+async function indicatorSettings() {
+  const { pageBadge = true, indicator, lang } = await chrome.storage.local.get(["pageBadge", "indicator", "lang"]);
+  setLang(resolveLang(lang));
+  return { master: pageBadge, ind: normIndicator(indicator) };
+}
+
+// Hosts-bestand-treffers kort onthouden: bij doorklikken binnen een site niet steeds de helper vragen.
+const hostsMemo = new Map();
+async function hostsFor(host) {
+  const m = hostsMemo.get(host);
+  if (m && m.until > Date.now()) return m.v;
+  const v = await hostsLookup(host);
+  hostsMemo.set(host, { v, until: Date.now() + 5000 });
+  if (hostsMemo.size > 200) hostsMemo.delete(hostsMemo.keys().next().value);
+  return v;
+}
+
+function sourceName(source) {
+  return { rule: "Host Override", hosts: t("hosts-bestand"), differs: t("afwijkende DNS") }[source] || "";
+}
+
+async function setTabBadge(tabId, source) {
+  try {
+    const b = BADGE[source];
+    if (b) {
+      await chrome.action.setBadgeBackgroundColor({ color: b[1], tabId });
+      await chrome.action.setBadgeText({ text: b[0], tabId });
+    } else {
+      // null: terug naar de algemene badge (aantal regels). Oudere Chrome-versies kennen null niet: dan leeg.
+      await chrome.action.setBadgeText({ text: null, tabId }).catch(() => chrome.action.setBadgeText({ text: "", tabId }));
+    }
+  } catch { /* tab bestaat niet meer */ }
+}
+
+// Indicator tekenen of weghalen. Alleen in het hoofdframe van http(s)-pagina's waar we toegang hebben.
+async function paintIndicator(tabId, rec) {
+  if (!rec || !(await chrome.permissions.contains(ALL_SITES))) return;
+  const { master, ind } = await indicatorSettings();
+  const { [`dismissed:${tabId}`]: dismissed } = await chrome.storage.session.get(`dismissed:${tabId}`);
+  const show = master && dismissed !== rec.host && triggers(rec.result, ind);
+  if (!show && !rec.painted) return; // niets te tekenen en niets weg te halen
+  let cfg = { remove: true };
+  if (show) {
+    const r = rec.result;
+    const source = sourceName(r.source);
+    cfg = {
+      style: ind.style, corner: ind.corner, edge: ind.edge, size: ind.size, opacity: ind.opacity,
+      hideHover: ind.hideHover, dismiss: ind.dismiss, color: ind.color, fg: textColor(ind.color),
+      text: renderLabel(ind.text, { ip: r.ip || "", host: rec.host, source }, ind.showIp),
+      title: (r.source === "rule" ? t("Host Override: deze pagina komt van je testserver ({ip}).", { ip: r.ip })
+        : r.source === "hosts" ? t("Host Override: {host} staat in je hosts-bestand ({ip}).", { host: rec.host, ip: r.ip })
+        : t("Host Override: het IP van deze pagina ({ip}) wijkt af van publieke DNS.", { ip: r.ip || "?" })) +
+        (ind.dismiss ? " " + t("Klik om te verbergen voor deze tab.") : ""),
+      closeLabel: t("Verbergen voor deze tab"),
+    };
+  }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: drawIndicator, args: [cfg, null] });
+    rec.painted = show;
+    await chrome.storage.session.set({ [`tab:${tabId}`]: rec });
+  } catch { /* pagina niet toegankelijk (chrome://, Web Store, PDF-viewer) */ }
+}
+
+async function evaluate(tabId, host, ip) {
+  const state = await getState();
+  const rule = matchRule(activeRules(state), host);
+  let hosts = null, doh = null;
+  if (!rule) {
+    hosts = await hostsFor(host); // lokaal, alleen als de helper zich heeft bewezen
+    const hostsHit = hosts && hosts.some((e) => e.kind !== "blocked");
+    const { master, ind } = await indicatorSettings();
+    // Publieke DNS alleen automatisch als de gebruiker "wijkt af van publieke DNS" heeft aangezet
+    // (dan gaat elke bezochte hostnaam naar Cloudflare; dat staat bij de instelling).
+    if (!hostsHit && ip && master && ind.onDiffers) {
+      try { doh = await dohLookup(host); } catch { doh = null; }
+    } else if (!hostsHit && ip) {
+      const c = (await chrome.storage.session.get(`doh:${host}`))[`doh:${host}`];
+      if (c && c.exp > Date.now()) doh = c; // eerder op klik opgezocht
+    }
+  }
+  const result = classify({ ip, rule, hosts, doh });
+  const rec = { host, ip: ip || null, result, at: Date.now() };
+  await chrome.storage.session.set({ [`tab:${tabId}`]: rec });
+  await setTabBadge(tabId, result.source === "differs" && result.near ? null : result.source);
+  await paintIndicator(tabId, rec);
 }
 
 async function onCompleted(d) {
-  if (d.tabId < 0) return;
-  const host = new URL(d.url).hostname;
-  await chrome.storage.session.set({ [`tab:${d.tabId}`]: { host, ip: d.ip || null } });
-  const rule = matchRule(activeRules(await getState()), host);
-  if (rule) {
-    chrome.action.setBadgeBackgroundColor({ color: "#c2410c", tabId: d.tabId });
-    chrome.action.setBadgeText({ text: "TEST", tabId: d.tabId });
-    const { pageBadge = true } = await chrome.storage.local.get("pageBadge");
-    if (pageBadge) {
-      try { await chrome.scripting.executeScript({ target: { tabId: d.tabId }, func: pill, args: [rule.ip, chrome.i18n.getMessage("pillTitle")] }); } catch { /* pagina niet toegankelijk */ }
-    }
+  if (d.tabId < 0 || d.frameId !== 0) return;
+  let host;
+  try { host = new URL(d.url).hostname; } catch { return; }
+  const { [`dismissed:${d.tabId}`]: dismissed } = await chrome.storage.session.get(`dismissed:${d.tabId}`);
+  if (dismissed && dismissed !== host) await chrome.storage.session.remove(`dismissed:${d.tabId}`);
+  await evaluate(d.tabId, host, d.ip || null);
+}
+
+// Instellingen van de indicator gewijzigd: open tabs direct bijwerken (zelfde uitkomst, nieuwe stijl).
+async function repaintAll() {
+  const all = await chrome.storage.session.get(null);
+  for (const [k, rec] of Object.entries(all)) {
+    if (!k.startsWith("tab:")) continue;
+    const tabId = Number(k.slice(4));
+    await setTabBadge(tabId, rec.result?.source === "differs" && rec.result.near ? null : rec.result?.source);
+    await paintIndicator(tabId, rec);
   }
 }
+
 function registerWebRequest() {
   try {
     if (!chrome.webRequest.onCompleted.hasListener(onCompleted)) {
@@ -134,7 +220,7 @@ function registerWebRequest() {
 }
 registerWebRequest();
 chrome.permissions.onAdded.addListener(registerWebRequest);
-chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove(`tab:${id}`));
+chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove([`tab:${id}`, `dismissed:${id}`]));
 
 function startAlarm() {
   chrome.alarms.create("resync", { periodInMinutes: 1 });
@@ -159,6 +245,23 @@ chrome.commands.onCommand.addListener(async (cmd, tab) => {
   if (autoReload) await reloadIfAffected(tab, old, await getState());
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return;
   if (msg === "status") { status().then(sendResponse, (e) => sendResponse({ error: String(e) })); return true; }
+  // Klik op de indicator: verbergen voor deze tab (tot de tab naar een andere site gaat of sluit).
+  if (msg?.type === "ho-dismiss" && sender.tab?.id >= 0 && sender.frameId === 0 && /^https?:/.test(sender.url || "")) {
+    const tabId = sender.tab.id, host = new URL(sender.url).hostname;
+    chrome.storage.session.get(`tab:${tabId}`).then(async ({ [`tab:${tabId}`]: rec }) => {
+      await chrome.storage.session.set({ [`dismissed:${tabId}`]: host });
+      if (rec) { rec.painted = false; await chrome.storage.session.set({ [`tab:${tabId}`]: rec }); }
+    });
+  }
+  // Popup: opnieuw beoordelen na "Opzoeken" (publieke DNS) of als de helper net gekoppeld is.
+  if (msg?.type === "ho-reevaluate" && !sender.tab && Number.isInteger(msg.tabId)) {
+    chrome.storage.session.get(`tab:${msg.tabId}`).then(async ({ [`tab:${msg.tabId}`]: rec }) => {
+      if (rec) { hostsMemo.delete(rec.host); await evaluate(msg.tabId, rec.host, rec.ip); }
+      sendResponse(true);
+    });
+    return true;
+  }
 });

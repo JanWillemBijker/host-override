@@ -288,4 +288,136 @@ async function check(host, ip) {
   return { ip, http: httpRes, https: httpsRes };
 }
 
-module.exports = { query, trace, check, TYPES };
+// ---------- Hosts-bestand (alleen lezen) ----------
+// Leest het hosts-bestand van het systeem en zoekt namen op. Er wordt nooit iets naar geschreven.
+// HOST_OVERRIDE_HOSTS_FILE is alleen voor tests (een nep-hosts-bestand); de extensie kan dit niet zetten:
+// het is een omgevingsvariabele van het helper-proces en de setup-scripts zetten hem niet.
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const HOSTS_MAX = 5 * 1024 * 1024; // ad-block-hosts-bestanden kunnen enorm zijn; daarboven lezen we alleen het begin
+const HOSTS_LOOPBACK_LIST = 50; // meer loopback-namen dan dit: een blokkeerlijst in 127.0.0.1-stijl
+const DEFAULT_NAMES = new Set(["localhost", "localhost.localdomain", "localdomain", "broadcasthost", "local",
+  "ip6-localhost", "ip6-loopback", "ip6-localnet", "ip6-mcastprefix", "ip6-allnodes", "ip6-allrouters", "ip6-allhosts"]);
+// Namen in een hosts-bestand: iets ruimer dan regels in de extensie (underscore komt voor), geen wildcards.
+const NAME_RE = /^(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*$/;
+
+function hostsPath() {
+  if (process.env.HOST_OVERRIDE_HOSTS_FILE) return process.env.HOST_OVERRIDE_HOSTS_FILE;
+  if (process.platform === "win32") return path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts");
+  return "/etc/hosts";
+}
+
+// Canonieke vorm, zodat "::FFFF:1.2.3.4", "2001:DB8:0::1" en "1.2.3.4" vergelijkbaar zijn
+// (zelfde regel als normIp in de extensie). IPv4-mapped IPv6 wordt gewoon IPv4.
+function plainIp(ip) {
+  ip = String(ip).toLowerCase();
+  if (!net.isIPv6(ip)) return ip;
+  let c;
+  try { c = new URL(`http://[${ip}]/`).hostname.slice(1, -1); } catch { return ip; }
+  const m = c.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (m) { const a = parseInt(m[1], 16), b = parseInt(m[2], 16); return [a >> 8, a & 255, b >> 8, b & 255].join("."); }
+  return c;
+}
+
+function ipKind(ip) {
+  if (ip === "0.0.0.0" || ip === "::") return "blocked";
+  if (/^127\./.test(ip) || ip === "::1") return "loopback";
+  return "override";
+}
+
+// Robuuste parser: BOM, CRLF/CR, commentaar (ook achter een regel), tabs, meerdere namen per regel,
+// IPv4/IPv6 (ook met zone-index zoals fe80::1%lo0), hoofdletters en een punt aan het eind van een naam.
+// Uitkomst: { lines: [{ ip, names, kind, line }], defaults, invalid }
+function parseHostsText(text) {
+  const lines = [];
+  let defaults = 0, invalid = 0, n = 0;
+  for (const raw of String(text).replace(/^\uFEFF/, "").split(/\r\n|\r|\n/)) {
+    n++;
+    const line = raw.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const [ipRaw, ...rest] = line.split(/[ \t\f\v]+/);
+    const ipBare = ipRaw.replace(/%[\w.-]+$/, "");
+    if (!net.isIP(ipBare) || rest.length === 0) { invalid++; continue; }
+    const ip = plainIp(ipBare);
+    const kind = ipKind(ip);
+    const names = [];
+    for (let name of rest) {
+      name = name.toLowerCase().replace(/\.$/, "");
+      if (name.length > 253 || !NAME_RE.test(name)) { invalid++; continue; }
+      if (DEFAULT_NAMES.has(name) || (kind === "loopback" && name === os.hostname().toLowerCase())) { defaults++; continue; }
+      if (!names.includes(name)) names.push(name);
+    }
+    if (names.length) lines.push({ ip, names, kind, line: n });
+  }
+  // Veel namen op 127.0.0.1/::1: dat is een blokkeerlijst, geen lokale ontwikkelomgeving.
+  const loopbackNames = lines.filter((l) => l.kind === "loopback").reduce((a, l) => a + l.names.length, 0);
+  if (loopbackNames > HOSTS_LOOPBACK_LIST) for (const l of lines) if (l.kind === "loopback") l.kind = "blocked";
+  return { lines, defaults, invalid };
+}
+
+// Leest maximaal HOSTS_MAX bytes (afgekapt op een hele regel) en bouwt een index naam -> [{ip, kind}].
+// Gecachet op pad + grootte + wijzigingstijd, zodat een groot bestand niet bij elke paginaweergave opnieuw wordt gelezen.
+let hostsCache = null;
+async function loadHosts() {
+  const file = hostsPath();
+  let st;
+  try { st = await fs.promises.stat(file); }
+  catch (e) { return { path: file, exists: false, error: e.code === "ENOENT" ? null : (e.code || e.message), lines: [], index: new Map(), defaults: 0, invalid: 0, size: 0, truncated: false }; }
+  const key = `${file}|${st.size}|${st.mtimeMs}`;
+  if (hostsCache && hostsCache.key === key) return hostsCache;
+  if (!st.isFile()) return { path: file, exists: false, error: "not a file", lines: [], index: new Map(), defaults: 0, invalid: 0, size: 0, truncated: false };
+  const fh = await fs.promises.open(file, "r");
+  let buf;
+  try {
+    const len = Math.min(st.size, HOSTS_MAX);
+    buf = Buffer.alloc(len);
+    let off = 0;
+    while (off < len) {
+      const { bytesRead } = await fh.read(buf, off, len - off, off);
+      if (!bytesRead) break;
+      off += bytesRead;
+    }
+    buf = buf.subarray(0, off);
+  } finally { await fh.close(); }
+  const truncated = st.size > HOSTS_MAX;
+  let text = buf.toString("utf8");
+  if (truncated) text = text.slice(0, Math.max(0, text.lastIndexOf("\n")));
+  const parsed = parseHostsText(text);
+  const index = new Map();
+  for (const l of parsed.lines) {
+    for (const name of l.names) {
+      const list = index.get(name) || [];
+      if (!list.some((e) => e.ip === l.ip)) list.push({ ip: l.ip, kind: l.kind, line: l.line });
+      index.set(name, list);
+    }
+  }
+  hostsCache = { key, path: file, exists: true, error: null, size: st.size, mtime: st.mtime.toISOString(), truncated, index, ...parsed };
+  return hostsCache;
+}
+
+// names gegeven: alleen de treffers voor die namen. Zonder names: een compact overzicht
+// (overrides volledig tot 1000 regels, blokkeringen alleen geteld plus een klein voorbeeld).
+async function hosts(names) {
+  const h = await loadHosts();
+  const base = { path: h.path, exists: h.exists, error: h.error, size: h.size, mtime: h.mtime || null, truncated: h.truncated, max: HOSTS_MAX };
+  if (names) {
+    const matches = {};
+    for (const n of names) matches[n] = (h.index.get(n) || []).map(({ ip, kind, line }) => ({ ip, kind, line }));
+    return { ...base, matches };
+  }
+  const over = h.lines.filter((l) => l.kind !== "blocked");
+  const blocked = h.lines.filter((l) => l.kind === "blocked");
+  return {
+    ...base,
+    entries: over.slice(0, 1000),
+    entriesTruncated: over.length > 1000,
+    blocked: blocked.reduce((a, l) => a + l.names.length, 0),
+    blockedSample: blocked.slice(0, 50),
+    defaults: h.defaults,
+    invalid: h.invalid,
+  };
+}
+
+module.exports = { query, trace, check, TYPES, hosts, parseHostsText, hostsPath, plainIp, HOSTS_MAX };

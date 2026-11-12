@@ -7,10 +7,10 @@ const RESOLVERS = [
 ];
 const REC_TYPES = ["A", "AAAA", "CNAME", "MX", "NS", "TXT", "SOA", "CAA"];
 
-const IDS = { summary: "dSummary", cRecords: "dRecords", cNs: "dNs", cProp: "dProp", cSrv: "dSrv", cMail: "dMail",
+const IDS = { summary: "dSummary", cRecords: "dRecords", cHosts: "dHosts", cNs: "dNs", cProp: "dProp", cSrv: "dSrv", cMail: "dMail",
   copyReport: "dCopy", domain: "dDomain", err: "dErr", banner: "dBanner", f: "dForm", resolver: "dResolver" };
-const PANES = ["summary", "cRecords", "cNs", "cProp", "cSrv", "cMail"];
-const SEC = { cRecords: "dRecords", cNs: "dNs", cProp: "dProp", cSrv: "dSrv", cMail: "dMail" };
+const PANES = ["summary", "cRecords", "cHosts", "cNs", "cProp", "cSrv", "cMail"];
+const SEC = { cRecords: "dRecords", cHosts: "dHosts", cNs: "dNs", cProp: "dProp", cSrv: "dSrv", cMail: "dMail" };
 const $ = (id) => document.getElementById(IDS[id] || id);
 
 // Veilige DOM-bouwer: DNS-data (bijvoorbeeld TXT-records) komt nooit als HTML in de pagina.
@@ -68,7 +68,7 @@ function paintDots() {
     const l = findings.filter((f) => f.sec === sec).map((f) => f.level);
     return l.includes("bad") ? "bad" : l.includes("warn") ? "warn" : l.length ? "ok" : "";
   };
-  for (const id of ["cRecords", "cNs", "cProp", "cSrv", "cMail"]) $(id).querySelector(".sdot").className = "sdot " + worst(SEC[id]);
+  for (const id of ["cRecords", "cHosts", "cNs", "cProp", "cSrv", "cMail"]) $(id).querySelector(".sdot").className = "sdot " + worst(SEC[id]);
   const all = findings.some((f) => f.level === "bad") ? "bad" : findings.some((f) => f.level === "warn") ? "warn" : findings.length ? "ok" : "";
   $("summary").querySelector(".sdot").className = "sdot " + all;
 }
@@ -127,6 +127,35 @@ async function run(name, resolver) {
       ? rows.map((r) => rc([badge("", r.type), mono(r.data)], `${r.name !== name && r.name !== name + "." ? r.name + " · " : ""}TTL ${ttl(r.ttl) || "-"}`))
       : h("p", { class: "muted" }, nx ? t("NXDOMAIN: deze naam bestaat niet.") : t("Geen records gevonden.")));
     return rows;
+  })();
+
+  // 1b. Hosts-bestand (lokaal gelezen door de helper; alleen lezen)
+  const hostsP = (async () => {
+    const add = sec("dHosts");
+    const r = await attempt(api("/__hosts", { names: [name] }));
+    if (!r.ok) {
+      setBodyG("cHosts", h("p", { class: "muted" }, t("Kon het hosts-bestand niet lezen: {e}", { e: r.e === "status 400" ? t("De helper moet worden bijgewerkt.") : r.e })));
+      setSubG("cHosts", "-");
+      return [];
+    }
+    const d = r.v, list = d.matches?.[name] || [];
+    const notes = [];
+    if (!d.exists) notes.push(h("p", { class: "muted" }, t("Geen hosts-bestand gevonden ({path}).", { path: d.path })));
+    if (d.truncated) notes.push(h("p", { class: "muted" }, t("Bestand groter dan {mb} MB: alleen het begin is gelezen.", { mb: Math.round(d.max / 1048576) })));
+    const usable = list.filter((e) => e.kind !== "blocked");
+    if (usable.length) {
+      add(ruleHit ? "info" : "warn", t("{name} staat in je hosts-bestand ({ips}): deze computer gebruikt niet het live IP, ook niet in incognito.", { name, ips: usable.map((e) => e.ip).join(", ") }));
+      if (ruleHit) add("info", t("In dit Chrome-profiel gaat de Host Override-regel ({ip}) voor op het hosts-bestand.", { ip: ruleHit.ip }));
+    } else if (list.length) add("warn", t("{name} wordt geblokkeerd in je hosts-bestand ({ips}).", { name, ips: list.map((e) => e.ip).join(", ") }));
+    else if (d.exists) add("ok", t("{name} staat niet in je hosts-bestand.", { name }));
+    setSubG("cHosts", list.length ? list.map((e) => e.ip).join(", ") : t("geen regels"));
+    setBodyG("cHosts",
+      list.length
+        ? list.map((e) => rc([badge(e.kind === "blocked" ? "warn" : "hosts", e.kind === "blocked" ? t("blokkade") : e.kind === "loopback" ? t("lokaal") : t("override")), mono(e.ip)], `${d.path} · ${t("regel")} ${e.line}`))
+        : h("p", { class: "muted" }, t("Geen regels voor {name} in {path}.", { name, path: d.path })),
+      notes,
+      h("p", { class: "small" }, t("Alleen gelezen, nooit aangepast. Bewerken kan alleen met beheerdersrechten.")));
+    return usable;
   })();
 
   // 2. Delegatie en nameservers
@@ -250,10 +279,12 @@ async function run(name, resolver) {
     const add = sec("dSrv");
     const { authA } = await nsP;
     const rows = await recordsP;
+    const hostsHits = await hostsP;
     const dnsIps = authA && authA.length ? authA : rows.filter((r) => r.type === "A").map((r) => r.data);
     const targets = [...new Set(dnsIps)].map((ip) => ({ ip, kind: "live" }));
     if (override && !targets.some((x) => x.ip === override.ip)) targets.push({ ip: override.ip, kind: "test" });
     else if (override) targets.find((x) => x.ip === override.ip).kind = "both";
+    for (const e of hostsHits) if (!targets.some((x) => x.ip === e.ip)) targets.push({ ip: e.ip, kind: "hosts" });
     if (!targets.length) { setBodyG("cSrv", h("p", { class: "muted" }, t("Geen IP-adressen om te controleren."))); setSubG("cSrv", "-"); return; }
 
     const results = await Promise.all(targets.map(async (tg) => {
@@ -263,8 +294,8 @@ async function run(name, resolver) {
     }));
     const cards = [];
     for (const r of results) {
-      const tag = r.kind === "test" ? badge("test", t("Test (override)")) : r.kind === "both" ? badge("test", t("Live en test (zelfde IP)")) : badge("live", t("Live (DNS)"));
-      const label = `${r.kind === "test" ? t("Test") : r.kind === "both" ? t("Live/test") : t("Live")} ${r.ip}`;
+      const tag = r.kind === "hosts" ? badge("hosts", t("Hosts-bestand")) : r.kind === "test" ? badge("test", t("Test (override)")) : r.kind === "both" ? badge("test", t("Live en test (zelfde IP)")) : badge("live", t("Live (DNS)"));
+      const label = `${r.kind === "hosts" ? t("Hosts-bestand") : r.kind === "test" ? t("Test") : r.kind === "both" ? t("Live/test") : t("Live")} ${r.ip}`;
       if (!r.chk.ok) { cards.push(rc([tag, mono(r.ip), badge("bad", t("mislukt"))], r.chk.e)); add("bad", t("{label}: controle mislukt ({e}).", { label, e: r.chk.e })); continue; }
       const { http, https } = r.chk.v;
       const httpTxt = http.ok ? `${http.status}${http.location ? " → " + http.location : ""}` : badge("bad", http.error);
@@ -298,7 +329,7 @@ async function run(name, resolver) {
       cards);
   })();
 
-  await Promise.all([recordsP, nsP, propP, mailP, srvP]);
+  await Promise.all([recordsP, hostsP, nsP, propP, mailP, srvP]);
 }
 
 // ---------- Rapport kopiëren ----------
