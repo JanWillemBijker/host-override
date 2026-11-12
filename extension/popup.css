@@ -241,3 +241,9 @@ form:has(#addGroup:not([hidden])) #addGroup { grid-column: 2; }
 .rule .del { width: 22px; }
 .rule .hostcell .host { overflow-wrap: anywhere; }
 .geditor .field input[type=text] { font: inherit; }
+.hdrs textarea { margin-top: 3px; }
+.authRow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 3px; }
+.authRow input { width: 100%; min-width: 0; }
+input[type=password] { background: var(--field); color: var(--fg); border: 1px solid transparent; border-radius: 6px; padding: 6px 8px; font: inherit; }
+.geditor .help { margin: 8px 0 0; }
+.geditor .indent { margin-left: 23px; }

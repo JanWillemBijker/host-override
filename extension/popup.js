@@ -4,7 +4,7 @@ import {
 } from "./common.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
-  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
 } from "./model.js";
 import { initI18n, t } from "./i18n.js";
 import { classify, dohLookup, hostsLookup, hostsOverview } from "./detect.js";
@@ -838,6 +838,75 @@ if (sideMode) {
 // --- Helper ---
 $("copySetup").onclick = async () => copy(await buildSetupCommand(os, readFile), $("copySetup"), t("Gekopieerd, plak het nu"));
 $("recheck").onclick = () => render();
+
+// --- Verzoek-headers per groep (declarativeNetRequest) ---
+groupEditorExtras.push((g, state) => {
+  const box = h("div", { class: "hdrs" }, h("h3", {}, t("Verzoek-headers voor deze groep")));
+  const setG = (patch) => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, ...patch } : x)));
+  const msg = h("p", { class: "small", role: "status" });
+
+  const nc = h("input", { type: "checkbox" });
+  nc.checked = g.noCache;
+  nc.onchange = () => setG({ noCache: nc.checked });
+  box.append(h("label", { class: "check" }, nc, t("Geen cache (Cache-Control en Pragma: no-cache)")),
+    h("p", { class: "small indent" }, t("Vraagt browser en server om verse inhoud. Een CDN zoals Cloudflare kan toch een kopie uit zijn cache geven; omzeilen lukt meestal alleen met een cache-busting query (?v=123) of een CDN-specifieke header of cookie (zie je CDN).")));
+
+  const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", placeholder: t("Gebruikersnaam"), "aria-label": t("Gebruikersnaam voor Basic-auth") });
+  const pass = h("input", { type: "password", autocomplete: "new-password", placeholder: t("Wachtwoord"), "aria-label": t("Wachtwoord voor Basic-auth") });
+  user.value = g.auth?.user || "";
+  pass.value = g.auth?.pass || "";
+  const saveAuth = h("button", { type: "button", class: "secondary" }, t("Opslaan"));
+  saveAuth.onclick = () => {
+    if (!user.value) { setG({ auth: null }); msg.textContent = t("Basic-auth uitgezet."); return; }
+    const p = authProblem(user.value, pass.value);
+    if (p) { msg.textContent = p === "user" ? t("Ongeldige gebruikersnaam (geen dubbele punt of stuurtekens).") : t("Ongeldig wachtwoord (geen stuurtekens, max 200 tekens)."); return; }
+    setG({ auth: { user: user.value, pass: pass.value } });
+  };
+  const clear = h("button", { type: "button", class: "secondary", hidden: !g.auth }, t("Wissen"));
+  clear.onclick = () => setG({ auth: null });
+  box.append(h("span", { class: "sublabel" }, t("Basic-auth (staging achter een wachtwoord)")),
+    h("div", { class: "authRow" }, user, pass), h("div", { class: "row" }, saveAuth, clear),
+    h("p", { class: "small" }, t("Stuurt Authorization: Basic alleen naar de hosts van deze groep. Helpt alleen bij sites met HTTP Basic Auth (het inlogvenster van de browser), niet bij WordPress- of app-logins. Het wachtwoord staat alleen lokaal in je browser: niet in sync en niet in een back-up, tenzij je dat bij de back-up zelf aanvinkt.")));
+
+  const ta = h("textarea", { rows: "3", spellcheck: "false", placeholder: "X-Debug: 1\nX-Staging-Bypass: geheim", "aria-label": t("Eigen headers, één per regel: Naam: waarde") });
+  ta.value = (g.headers || []).map((x) => `${x.name}: ${x.value}`).join("\n");
+  const saveH = h("button", { type: "button", class: "secondary" }, t("Headers opslaan"));
+  saveH.onclick = () => {
+    const out = [], bad = [];
+    for (const line of ta.value.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const i = line.indexOf(":");
+      const name = i > 0 ? line.slice(0, i).trim() : line.trim(), value = i > 0 ? line.slice(i + 1).trim() : "";
+      const p = headerProblem(name, value);
+      if (p) bad.push(`${name || "?"} (${p === "blocked" ? t("niet toegestaan") : p === "name" ? t("ongeldige naam") : t("ongeldige waarde")})`);
+      else out.push({ name, value });
+    }
+    if (out.length > MAX_HEADERS) bad.push(t("max {n} headers", { n: MAX_HEADERS }));
+    if (bad.length) { msg.textContent = t("Niet opgeslagen: {list}.", { list: bad.join(", ") }); return; }
+    msg.textContent = "";
+    setG({ headers: out });
+  };
+  box.append(h("span", { class: "sublabel" }, t("Eigen headers")), ta, h("div", { class: "row" }, saveH),
+    h("p", { class: "small" }, t("Eén per regel: Naam: waarde. Niet toegestaan: Host, Cookie, Authorization (gebruik Basic-auth hierboven), Origin, Referer, hop-by-hop-headers (Connection, Upgrade, Transfer-Encoding e.d.), Sec-* en Proxy-*.")));
+
+  // Toegang: Chrome zet headers alleen op hosts waarvoor de extensie toegang heeft.
+  if (groupHasHeaders(g)) {
+    const origins = groupOrigins(state, g.id);
+    const perm = h("div", { class: "help" });
+    box.append(perm);
+    if (!origins.length) perm.textContent = t("Voeg regels aan deze groep toe; de headers gelden voor die hosts zolang de groep aan staat.");
+    else chrome.permissions.contains({ origins }).then((ok) => {
+      if (ok) { perm.textContent = t("Actief voor {n} host(s) zolang deze groep aan staat.", { n: origins.length }); return; }
+      perm.append(h("span", {}, t("Chrome zet deze headers alleen als de extensie toegang heeft tot deze domeinen.") + " "));
+      const b = h("button", { type: "button", class: "secondary" }, t("Toegang geven"));
+      b.onclick = async () => { if (await chrome.permissions.request({ origins })) render(false); };
+      perm.append(h("div", { class: "row" }, b));
+    });
+    box.append(h("p", { class: "small" }, t("Navigeer je vanaf een andere site naar deze hosts (bijvoorbeeld een link in webmail), dan zet Chrome de headers alleen met toegang tot alle sites (IP-weergave).")));
+  }
+  box.append(msg);
+  return box;
+});
 
 tab = await getTab();
 render();

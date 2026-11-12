@@ -1,5 +1,5 @@
 import { PORT, EXPECTED_HELPER, isHost, activeRules, matchRule, reloadIfAffected, getSecret, helperStatus, helperFetch, loadState, STATE_KEYS } from "./common.js";
-import { groupOf, groupName, activeGroups, normState, isTargetHost, isIp } from "./model.js";
+import { groupOf, groupName, activeGroups, normState, isTargetHost, isIp, buildDnrRules } from "./model.js";
 import { classify, triggers, dohLookup, hostsLookup } from "./detect.js";
 import { normIndicator, renderLabel, textColor, drawIndicator } from "./indicator.js";
 import { t, setLang, resolveLang } from "./i18n.js";
@@ -49,9 +49,27 @@ async function pushToProxy(rules) {
   }
 }
 
+// Verzoek-headers per groep (geen cache, Basic-auth, eigen headers) via declarativeNetRequest.
+// Alleen voor actieve regels van groepen die aan staan; Chrome past ze alleen toe op hosts waarvoor
+// de extensie toegang heeft (declarativeNetRequestWithHostAccess).
+let headersKey = "";
+async function applyHeaders(state) {
+  if (!chrome.declarativeNetRequest) return;
+  const add = buildDnrRules(state);
+  const key = JSON.stringify(add);
+  if (key === headersKey) return;
+  try {
+    const old = await chrome.declarativeNetRequest.getDynamicRules();
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: old.map((r) => r.id), addRules: add });
+    headersKey = key;
+  } catch (e) { console.warn("Headers niet ingesteld:", e); }
+}
+
 // Zet de proxy-regel voor het gewone profiel en stuur de IP-koppelingen naar de helper.
 async function apply() {
-  const rules = activeRules(await getState());
+  const state = await getState();
+  await applyHeaders(state);
+  const rules = activeRules(state);
   const info = await helperStatus();
   if (rules.length === 0) {
     await chrome.proxy.settings.clear({ scope: "regular" });
@@ -66,7 +84,7 @@ async function apply() {
   });
   const ok = info.verified && await pushToProxy(rules);
   // Eén actieve groep: badge in de kleur van die groep. Meerdere: de vaste accentkleur.
-  const groups = activeGroups(await getState());
+  const groups = activeGroups(state);
   const color = groups.length === 1 ? groups[0].color : "#c2410c";
   await chrome.action.setBadgeBackgroundColor({ color: ok ? color : "#c92a2a" });
   await chrome.action.setBadgeText({ text: ok ? String(rules.length) : "!" });

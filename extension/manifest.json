@@ -16,6 +16,7 @@
     "storage",
     "alarms",
     "webRequest",
+    "declarativeNetRequestWithHostAccess",
     "activeTab",
     "scripting",
     "sidePanel"

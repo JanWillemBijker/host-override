@@ -232,6 +232,42 @@ await test("registreerbaar domein (bij benadering)", () => {
   assert.equal(M.regDomain("1.2.3.4"), "1.2.3.4");
 });
 
+console.log("Verzoek-headers per groep (declarativeNetRequest)");
+await test("headers: naam/waarde streng; hop-by-hop, verboden en eigen velden geblokkeerd", () => {
+  assert.equal(M.headerProblem("X-Debug", "1"), null);
+  for (const n of ["Host", "connection", "Cookie", "Authorization", "Transfer-Encoding", "Upgrade", "Sec-Fetch-Mode", "Proxy-Authorization", "Origin", "X-Host-Override-Token"]) assert.equal(M.headerProblem(n, "x"), "blocked", n);
+  for (const n of ["", "X Debug", "X:Debug", "Ünïcode", "a".repeat(65)]) assert.equal(M.headerProblem(n, "x"), "name", n);
+  for (const v of ["a\r\nX-Evil: 1", "a\nb", "\u0000", "x".repeat(1025)]) assert.equal(M.headerProblem("X-A", v), "value", JSON.stringify(v).slice(0, 20));
+  assert.equal(M.authProblem("user", "p@ss:w0rd"), null);
+  assert.equal(M.authProblem("us:er", "x"), "user"); assert.equal(M.authProblem("", "x"), "user"); assert.equal(M.authProblem("u", "a\nb"), "pass");
+  const g = M.normGroup({ id: "g1", headers: [{ name: "X-Ok", value: "1" }, { name: "Cookie", value: "a=b" }, { name: "X-Bad", value: "a\r\nb" }], auth: { user: "a:b", pass: "x" } }, 1);
+  assert.deepEqual(g.headers, [{ name: "X-Ok", value: "1" }]); assert.equal(g.auth, null);
+});
+await test("DNR: alleen actieve regels van groepen met headers; exact = regex op de host, wildcard = domein + subdomeinen", () => {
+  const raw = { enabled: true, groups: [{ id: "default" }, { id: "stg", noCache: true, auth: { user: "jan", pass: "wächter" }, headers: [{ name: "X-Debug", value: "1" }] }, { id: "off", noCache: true, enabled: false }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "shop.x.nl", ip: "2.2.2.2", group: "stg" }, { host: "*.y.nl", ip: "3.3.3.3", group: "stg" }, { host: "api.y.nl", ip: "4.4.4.4" }, { host: "z.nl", ip: "5.5.5.5", group: "off" }, { host: "q.nl", ip: "6.6.6.6", group: "stg", enabled: false }] };
+  const rules = M.buildDnrRules(M.normState(raw));
+  assert.equal(rules.length, 2);
+  const [exact, wild] = rules;
+  assert.equal(exact.condition.regexFilter, "^[a-z]+://shop\\.x\\.nl(:[0-9]+)?(/|$)");
+  assert.ok(new RegExp(exact.condition.regexFilter).test("https://shop.x.nl/a") && !new RegExp(exact.condition.regexFilter).test("https://shop.x.nl.evil.com/"));
+  assert.ok(!new RegExp(exact.condition.regexFilter).test("https://sub.shop.x.nl/"));
+  assert.deepEqual(wild.condition.requestDomains, ["y.nl"]);
+  assert.equal(wild.condition.excludedRequestDomains, undefined, "api.y.nl staat later in de lijst: de wildcard wint (eerste treffer)");
+  const hdr = Object.fromEntries(exact.action.requestHeaders.map((x) => [x.header, x.value]));
+  assert.equal(hdr["cache-control"], "no-cache"); assert.equal(hdr.pragma, "no-cache"); assert.equal(hdr["x-debug"], "1");
+  assert.equal(hdr.authorization, "Basic " + Buffer.from("jan:wächter", "utf8").toString("base64"));
+  assert.ok(rules.every((r, i) => r.id === i + 1 && r.action.type === "modifyHeaders"));
+  assert.equal(M.buildDnrRules(M.normState({ ...raw, enabled: false })).length, 0, "hoofdschakelaar uit");
+  // Een specifieke regel uit een andere groep vóór de wildcard: die host wordt uitgezonderd.
+  const raw2 = { ...raw, rules: [{ host: "api.y.nl", ip: "4.4.4.4" }, { host: "y.nl", ip: "4.4.4.4" }, { host: "*.y.nl", ip: "3.3.3.3", group: "stg" }] };
+  const [w2] = M.buildDnrRules(M.normState(raw2));
+  assert.deepEqual(w2.condition.excludedRequestDomains, ["api.y.nl"]);
+  assert.ok(w2.condition.regexFilter && !w2.condition.requestDomains, "kaal domein hoort bij een andere regel: alleen subdomeinen");
+  assert.ok(new RegExp(w2.condition.regexFilter).test("https://www.y.nl/") && !new RegExp(w2.condition.regexFilter).test("https://y.nl/"));
+  assert.deepEqual(M.groupOrigins(M.normState(raw), "stg"), ["*://shop.x.nl/*", "*://*.y.nl/*", "*://q.nl/*"]);
+});
+
 // ---------- 4. Helper: /__hosts ----------
 console.log("Helper /__hosts (eigen helper, tijdelijke HOME)");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ho-test-"));
