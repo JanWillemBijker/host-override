@@ -17,7 +17,7 @@ permissions: {} # per job zo weinig mogelijk; contents: write alleen in de relea
 
 jobs:
   macos:
-    runs-on: macos-14 # Apple silicon; bouwt arm64 en x64
+    runs-on: macos-latest # Apple silicon; bouwt arm64 en x64
     permissions:
       contents: read
     env:
