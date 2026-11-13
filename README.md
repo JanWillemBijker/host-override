@@ -168,3 +168,8 @@ Binary: `~/.host-override/bin/host-override-helper --uninstall` (Windows: `%USER
 - **Indicator in de pagina:** het TEST-label is nu instelbaar: badge, balk of rand, positie, kleur, tekst, grootte, dekking, verbergen bij muis erover of klik. Ook voor het hosts-bestand en (optioneel) afwijkende DNS.
 - **Groepen, notities, hostnaam als doel, headers per groep, verbindingen, abonnementen, sync, back-up, keuze publieke DNS en migratie-check** (zie hierboven bij Gebruiken).
 - **Toegankelijkheid:** betere contrasten (AA) in licht en donker, zichtbare focus op alle bedieningselementen, foutmeldingen op de tab Meer staan nu ook op die tab, sneltoets en TEST-label vertaald.
+
+## Wat is er nieuw in 1.7.1
+- **Welkomstpagina:** twee duidelijke installatiemanieren naast elkaar: de helper downloaden (geen Node.js nodig) of één commando in Terminal/PowerShell (Node.js nodig, geen koppelcode).
+- **Hulp bij de beveiligingsmelding:** zolang de helper niet ondertekend is, staan bij het openen stap-voor-stap instructies voor macOS en Windows, plus een kopieerbaar commando dat de blokkade weghaalt en de helper meteen opent. Voor Linux een kopieerbaar startcommando.
+- Helper-downloads staan nu in de GitHub-release (`v1.7.0`); de link `releases/latest` wijst daar naartoe.
