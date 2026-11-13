@@ -3,7 +3,7 @@ import {
   OS_LABELS, detectOS, buildChromeCommand, buildSetupCommand, reloadIfAffected, helperFetch, STATE_KEYS,
   detectArch, helperUrl, helperAsset, HELPER_SIGNED, pairHelper,
 } from "./common.js";
-import { openText, unsignedText, pairError } from "./helpertext.js";
+import { openText, unsignedHelp, renderUnsigned, pairError } from "./helpertext.js";
 import { formatCode } from "./pair.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
@@ -86,7 +86,7 @@ function showHelperCard(kind) {
   $("hDlAlt").href = alt ? helperUrl("mac", alt) : "#";
   $("hDlAlt").textContent = alt ? (alt === "x64" ? t("of Intel") : t("of Apple silicon")) : "";
   $("hOpen").textContent = openText(os, helperAsset(os, arch), t);
-  $("hUnsigned").textContent = unsignedText(os, HELPER_SIGNED, t);
+  renderUnsigned($("hUnsigned"), unsignedHelp(os, helperAsset(os, arch), HELPER_SIGNED, t), t);
   $("hAdv").open = kind === "outdated";
   if (kind === "missing") {
     $("hbarText").textContent = t("Helper niet gekoppeld");

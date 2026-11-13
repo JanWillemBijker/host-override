@@ -1,6 +1,6 @@
 import { OS_LABELS, detectOS, detectArch, buildSetupCommand, helperStatus, EXPECTED_HELPER, helperUrl, helperAsset, HELPER_RELEASES, HELPER_SIGNED, pairHelper } from "./common.js";
 import { initI18n, t } from "./i18n.js";
-import { openText, unsignedText, pairError } from "./helpertext.js";
+import { openText, unsignedHelp, renderUnsigned, pairError } from "./helpertext.js";
 import { formatCode } from "./pair.js";
 
 await initI18n();
@@ -31,7 +31,7 @@ async function renderOs() {
   if (alt) { $("dlAlt").href = helperUrl("mac", alt); $("dlAlt").textContent = alt === "x64" ? t("Intel-Mac? Download voor Intel") : t("Mac met Apple silicon? Download die versie"); }
   $("sums").href = HELPER_RELEASES + "SHA256SUMS";
   $("openText").textContent = openText(os, helperAsset(os, arch), t);
-  $("unsignedText").textContent = unsignedText(os, HELPER_SIGNED, t);
+  renderUnsigned($("unsignedBox"), unsignedHelp(os, helperAsset(os, arch), HELPER_SIGNED, t), t, { open: true });
   // Geavanceerd: Node.js-route (setup-commando plakken).
   $("term").textContent = win ? "PowerShell" : "Terminal";
   $("termHint").textContent = win

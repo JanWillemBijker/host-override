@@ -329,4 +329,9 @@ table.mig tbody th { white-space: nowrap; font-size: 10.5px; }
 .hpairmsg { font-size: 12px; min-height: 16px; }
 .hpairmsg.bad { color: var(--bad-fg); } .hpairmsg.ok { color: var(--ok-fg); }
 .hadv { margin: 6px 0; font-size: 12px; } .hadv > summary { cursor: pointer; color: var(--muted); }
-#hUnsigned:not(:empty) { display: block; margin-top: 2px; }
+details.unsigned { margin: 4px 0 2px; font-size: 12px; }
+details.unsigned > summary { cursor: pointer; font-weight: 600; }
+details.unsigned ol { margin: 4px 0; padding-left: 18px; } details.unsigned p { margin: 6px 0 3px; }
+.cmdrow { display: flex; gap: 6px; align-items: flex-start; }
+.cmdrow code { flex: 1; min-width: 0; display: block; padding: 4px 6px; overflow-wrap: anywhere; user-select: all; font-size: 11px; background: var(--field); border-radius: 4px; }
+.unsigned .note { opacity: .75; }

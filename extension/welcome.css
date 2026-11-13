@@ -52,4 +52,9 @@ button.secondary:hover { border-color: var(--accent); }
 .way .sub { font-size: 13px; font-weight: 400; color: var(--muted); }
 .way ol { margin-bottom: 8px; }
 input:focus-visible, a.btn:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-#unsignedText:not(:empty) { display: block; margin-top: 4px; font-size: 14px; }
+details.unsigned { margin: 8px 0 4px; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; color: var(--fg); font-size: 14px; }
+details.unsigned > summary { font-weight: 600; }
+details.unsigned ol { margin: 8px 0; } details.unsigned li { margin: 4px 0; } details.unsigned p { margin: 8px 0 4px; }
+.cmdrow { display: flex; gap: 8px; align-items: flex-start; }
+.cmdrow code { flex: 1; min-width: 0; display: block; padding: 6px 8px; overflow-wrap: anywhere; user-select: all; }
+.unsigned .note { color: var(--muted); font-size: 13px; }
