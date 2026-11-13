@@ -43,7 +43,7 @@ Als je "IP-weergave inschakelen" kiest, geef je de extensie optioneel toegang to
 Verwijder de extensie via chrome://extensions. De helper en zijn bestanden verwijder je met `host-override-helper --uninstall` (download) of het meegeleverde script (`uninstall.sh` of `helper/uninstall.ps1`).
 
 ### Contact
-BijBijker – https://bijbijker.nl (contactadres: zie de website).
+BijBijker – janwillem@bijbijker.nl – https://bijbijker.nl
 
 ## English
 
@@ -84,4 +84,4 @@ If you choose "Enable IP display" you optionally grant access to all sites. It i
 Remove the extension via chrome://extensions. Remove the helper and its files with `host-override-helper --uninstall` (download) or the bundled script (`uninstall.sh` or `helper/uninstall.ps1`).
 
 ### Contact
-BijBijker – https://bijbijker.nl (contact details on the website).
+BijBijker – janwillem@bijbijker.nl – https://bijbijker.nl
