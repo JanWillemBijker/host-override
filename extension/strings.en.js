@@ -1,5 +1,17 @@
 // Engelse vertalingen. Sleutel = de Nederlandse tekst.
 export const EN = {
+ "Kies één van de twee manieren:": "Choose one of the two ways:",
+ "Manier 1": "Option 1",
+ "Manier 2": "Option 2",
+ "Download de helper": "Download the helper",
+ "geen Node.js nodig": "no Node.js needed",
+ "Node.js nodig": "needs Node.js",
+ "Eén commando in": "One command in",
+ "<b>Download</b> het bestand voor jouw systeem:": "<b>Download</b> the file for your system:",
+ "Controleren kan met <a id=\"sums\" href=\"#\" rel=\"noopener\">SHA256SUMS</a>.": "You can verify the download with <a id=\"sums\" href=\"#\" rel=\"noopener\">SHA256SUMS</a>.",
+ "Geen download en geen koppelcode: het commando installeert de helper uit deze extensie en koppelt hem meteen. Je hebt wel <a href=\"https://nodejs.org\" target=\"_blank\" rel=\"noopener\">Node.js</a> nodig. Weet je het niet? Typ <code>node -v</code> in de terminal; zie je een versienummer, dan heb je het.": "No download and no pairing code: the command installs the helper from this extension and connects it right away. You do need <a href=\"https://nodejs.org\" target=\"_blank\" rel=\"noopener\">Node.js</a>. Not sure? Type <code>node -v</code> in the terminal; if you see a version number, you have it.",
+ "Open de terminal.": "Open the terminal.",
+ "De helper draait daarna op de achtergrond en start automatisch bij inloggen.": "The helper then runs in the background and starts automatically when you log in.",
  "Gekopieerd": "Copied",
  "Helper niet gekoppeld": "Helper not connected",
  "Sluiten": "Close",

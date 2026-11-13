@@ -45,7 +45,11 @@ a.btn:hover { filter: brightness(1.08); }
 @media (prefers-color-scheme: dark) { .pairmsg.bad { color: #ff8787; } }
 button.secondary { background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
 button.secondary:hover { border-color: var(--accent); }
-details.adv { margin-top: 14px; color: var(--fg); font-size: 15px; }
-details.adv > summary { color: var(--muted); font-size: 14px; }
+.choose { margin: 14px 0 8px; font-weight: 600; }
+.way { margin: 10px 0; padding: 14px 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.way h3 { margin: 0 0 4px; font-size: 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.way .tag { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); }
+.way .sub { font-size: 13px; font-weight: 400; color: var(--muted); }
+.way ol { margin-bottom: 8px; }
 input:focus-visible, a.btn:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 #unsignedText:not(:empty) { display: block; margin-top: 4px; font-size: 14px; }

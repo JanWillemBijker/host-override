@@ -24,30 +24,36 @@
       <label class="lbl">Jouw systeem
         <select id="os"></select>
       </label>
-      <ol class="steps">
-        <li><span data-th><b>Download de helper</b> (geen Node.js nodig):</span>
-          <div class="dlrow"><a id="dl" class="btn primary" href="#" rel="noopener">Download</a> <a id="dlAlt" class="small" href="#" rel="noopener"></a></div>
-        </li>
-        <li><span id="openText"></span> <span id="unsignedText" class="hint"></span></li>
-        <li><span data-th>Er verschijnt een venster met een <b>koppelcode van 12 tekens</b>. Typ of plak die hier:</span>
-          <form id="pairForm" class="pair">
-            <input id="code" autocomplete="off" autocapitalize="characters" maxlength="20" placeholder="XXXX-XXXX-XXXX" aria-label="Koppelcode" spellcheck="false">
-            <button class="primary">Koppel</button>
-          </form>
-          <div id="pairMsg" class="pairmsg" role="status"></div>
-        </li>
-      </ol>
-      <p class="need"><span data-th>De helper draait daarna op de achtergrond en start automatisch bij inloggen. Controleren kan met <a id="sums" href="#" rel="noopener">SHA256SUMS</a>.</span></p>
-      <details class="adv"><summary>Geavanceerd: met Node.js</summary>
-        <p data-th>Heb je <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a>? Dan kun je de helper ook vanuit de broncode in deze extensie installeren, zonder download.</p>
-        <ol>
+      <p class="choose">Kies één van de twee manieren:</p>
+      <div class="way">
+        <h3><span class="tag">Manier 1</span> Download de helper <span class="sub">geen Node.js nodig</span></h3>
+        <ol class="steps">
+          <li><span data-th><b>Download</b> het bestand voor jouw systeem:</span>
+            <div class="dlrow"><a id="dl" class="btn primary" href="#" rel="noopener">Download</a> <a id="dlAlt" class="small" href="#" rel="noopener"></a></div>
+          </li>
+          <li><span id="openText"></span> <span id="unsignedText" class="hint"></span></li>
+          <li><span data-th>Er verschijnt een venster met een <b>koppelcode van 12 tekens</b>. Typ of plak die hier:</span>
+            <form id="pairForm" class="pair">
+              <input id="code" autocomplete="off" autocapitalize="characters" maxlength="20" placeholder="XXXX-XXXX-XXXX" aria-label="Koppelcode" spellcheck="false">
+              <button class="primary">Koppel</button>
+            </form>
+            <div id="pairMsg" class="pairmsg" role="status"></div>
+          </li>
+        </ol>
+        <p class="need"><span data-th>Controleren kan met <a id="sums" href="#" rel="noopener">SHA256SUMS</a>.</span></p>
+      </div>
+      <div class="way">
+        <h3><span class="tag">Manier 2</span> <span>Eén commando in <span id="term">Terminal</span></span> <span class="sub">Node.js nodig</span></h3>
+        <p data-th>Geen download en geen koppelcode: het commando installeert de helper uit deze extensie en koppelt hem meteen. Je hebt wel <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js</a> nodig. Weet je het niet? Typ <code>node -v</code> in de terminal; zie je een versienummer, dan heb je het.</p>
+        <ol class="steps">
           <li data-th>Klik op <b>Kopieer setup-commando</b>.</li>
-          <li><span data-th>Open <b id="term">Terminal</b>.</span> <span id="termHint" class="hint"></span></li>
+          <li><span data-th>Open de terminal.</span> <span id="termHint" class="hint"></span></li>
           <li data-th>Plak met <b id="paste">Cmd+V</b> en druk op Enter.</li>
         </ol>
-        <button id="copy" class="secondary">Kopieer setup-commando</button>
+        <button id="copy" class="primary">Kopieer setup-commando</button>
         <details><summary>Toon het commando</summary><textarea id="cmd" readonly rows="8" spellcheck="false"></textarea></details>
-      </details>
+      </div>
+      <p class="need"><span data-th>De helper draait daarna op de achtergrond en start automatisch bij inloggen.</span></p>
       <div id="state" class="state wait"><span class="dot"></span><span id="stateText">Wachten op de helper...</span></div>
     </div>
   </section>
