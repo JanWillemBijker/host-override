@@ -1,4 +1,4 @@
-# Chrome Web Store: teksten en antwoorden (versie 1.7.1)
+# Chrome Web Store: teksten en antwoorden (versie 1.8.0)
 
 Gemaakt door BijBijker (https://bijbijker.nl).
 
@@ -132,7 +132,7 @@ Alle bestanden zijn 24-bit PNG zonder alfakanaal, opgebouwd uit echte schermen v
 Upload de NL-set bij de Nederlandse vermelding en de EN-set bij de Engelse (in het dashboard kun je per taal afbeeldingen opgeven). Storepictogram: `extension/icons/icon128.png` (96x96 beeld met 16 px transparante rand).
 
 ## Checklist voor publicatie
-- [x] Manifest V3, versie 1.7.1, `homepage_url` = https://bijbijker.nl
+- [x] Manifest V3, versie 1.8.0, `homepage_url` = https://bijbijker.nl
 - [x] Naam ≤ 75 en korte beschrijving ≤ 132 tekens, NL en EN
 - [x] `_locales/en` en `_locales/nl` compleet (naam, omschrijving, sneltoets); overige teksten NL/EN via `strings.en.js`
 - [x] Geen nieuwe permissies voor hosts-bestand en indicator (zelfde `webRequest`, `scripting`, optioneel `<all_urls>`)
@@ -143,7 +143,7 @@ Upload de NL-set bij de Nederlandse vermelding en de EN-set bij de Engelse (in h
 - [x] Lokale helper duidelijk vermeld in de beschrijving en in de schermafbeeldingen
 - [x] Schermafbeeldingen, promotegel en marquee in NL en EN
 - [ ] Ontwikkelaarsaccount (eenmalig 5 USD): https://chrome.google.com/webstore/devconsole
-- [ ] `./package.sh` draaien en `dist/host-override-1.7.1.zip` uploaden
+- [ ] `./package.sh` draaien en `dist/host-override-1.8.0.zip` uploaden
 - [ ] `store/PRIVACY.md` op een openbare URL zetten (bijvoorbeeld bijbijker.nl/host-override/privacy of GitHub Pages) en invullen
 - [ ] Contact-e-mail in `PRIVACY.md` en in het dashboard invullen (verplicht geverifieerd e-mailadres)
 - [ ] Teksten hierboven, permissie-rechtvaardigingen en de reviewer-toelichting in het dashboard plakken

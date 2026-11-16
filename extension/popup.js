@@ -7,7 +7,7 @@ import { openText, unsignedHelp, renderUnsigned, pairError } from "./helpertext.
 import { formatCode } from "./pair.js";
 import {
   normState, allRules, isTarget, isTargetHost, cleanText, groupName, groupOf, setGroupEnabled, newGroupId, mergeParsed,
-  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, buildBackup, readBackup, backupPreview, applyBackup, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins,
+  DEFAULT_GROUP, GROUP_COLORS, NOTE_MAX, NAME_MAX, buildBackup, readBackup, backupPreview, applyBackup, subUrlProblem, subOrigin, analyzeConnections, regDomain, authProblem, headerProblem, MAX_HEADERS, groupHasHeaders, groupOrigins, wwwTwin,
 } from "./model.js";
 import { initI18n, t } from "./i18n.js";
 import { classify, dohLookup, hostsLookup, hostsOverview, dohProvider, DOH_PROVIDERS } from "./detect.js";
@@ -293,6 +293,31 @@ function h(tag, attrs, ...kids) {
   for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
   return el;
 }
+// Uitleg achter een (i)-knop in plaats van altijd zichtbare tekst eronder.
+let tipSeq = 0;
+function tipButton(tip, label) {
+  const id = tip.id || (tip.id = "tip" + ++tipSeq);
+  tip.classList.add("tipbox");
+  tip.hidden = true;
+  const b = h("button", { type: "button", class: "ibtn", "aria-expanded": "false", "aria-controls": id, title: t("Uitleg"), "aria-label": t("Uitleg") + (label ? ": " + label : "") }, "i");
+  b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); tip.hidden = !tip.hidden; b.setAttribute("aria-expanded", String(!tip.hidden)); };
+  return b;
+}
+// Maakt van <p class="tip"> een ingeklapte uitleg met een (i)-knop achter het vorige element (label, kop of vinkje).
+function enhanceTips(root = document) {
+  for (const tip of root.querySelectorAll(".tip:not(.tipbox)")) {
+    const host = tip.previousElementSibling;
+    const b = tipButton(tip, host?.textContent?.trim().slice(0, 60));
+    if (host && !host.matches("input,select,textarea,div.row")) host.append(" ", b);
+    else tip.before(b);
+  }
+}
+// Label met (i): geeft [label, uitlegblok] terug voor dynamische onderdelen.
+function withTip(labelEl, text) {
+  const tip = h("p", { class: "small" }, text);
+  labelEl.append(" ", tipButton(tip, labelEl.textContent.trim().slice(0, 60)));
+  return [labelEl, tip];
+}
 const gname = (g, st) => groupName(g, st, t);
 let editGroup = null; // id van de groep waarvan de instellingen open staan
 let editRule = null; // host van de regel waarvan notitie/groep open staat
@@ -320,6 +345,8 @@ function ruleRow(r, state) {
   cb.onchange = () => mutateRules((rules) => rules.map((x) => (x.host === r.host ? { ...x, enabled: cb.checked } : x)));
 
   const cell = h("div", { class: "hostcell" }, h("span", { class: "host" }, r.host));
+  const tw = state.wwwPair && wwwTwin(r.host);
+  if (tw && !allRules(state).some((x) => x.host === tw)) cell.append(h("span", { class: "rtwin", title: t("www en zonder www horen bij elkaar (Meer > Instellingen)") }, t("ook {h}", { h: tw })));
   if (r.note) cell.append(h("span", { class: "rnote", title: r.note }, r.note));
   let resEl = null;
   if (isTargetHost(r.ip)) {
@@ -330,7 +357,9 @@ function ruleRow(r, state) {
   }
 
   let target;
-  if (own) {
+  if (own && r.viaGroup) {
+    target = h("code", { class: "rotarget viagroup", title: t("IP van de groep (in de groepsinstellingen). Eigen IP: {ip}", { ip: r.ownIp }) }, r.ip);
+  } else if (own) {
     target = h("input", { type: "text", spellcheck: "false", title: t("IP of hostnaam aanpassen"), "aria-label": t("IP of hostnaam aanpassen") + ": " + r.host });
     target.value = r.ip;
     target.title = r.ip;
@@ -342,8 +371,8 @@ function ruleRow(r, state) {
     };
   } else target = h("code", { class: "rotarget", title: t("Uit een abonnement: alleen lezen") }, r.ip);
 
-  const more = h("button", { class: "del more", title: t("Notitie en groep"), "aria-label": t("Notitie en groep") + ": " + r.host,
-    "aria-expanded": String(editRule === r.host), hidden: !own }, "⋯");
+  const more = h("button", { class: "del more", title: t("Bewerken: notitie en groep"), "aria-label": t("Bewerken: notitie en groep") + ": " + r.host,
+    "aria-expanded": String(editRule === r.host), hidden: !own }, "✎");
   more.onclick = () => { editRule = editRule === r.host ? null : r.host; render(false); };
   const del = h("button", { class: "del", title: t("Verwijderen"), "aria-label": t("Verwijderen") + ": " + r.host, hidden: !own }, "×");
   del.onclick = () => mutateRules((rules) => rules.filter((x) => x.host !== r.host));
@@ -396,6 +425,21 @@ function groupEditor(g, state) {
   custom.onchange = () => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, color: custom.value.toLowerCase() } : x)));
   sw.append(custom);
   box.append(h("label", { class: "field" }, t("Naam"), name), h("div", { class: "field" }, h("span", {}, t("Kleur")), sw));
+  if (!g.sub) {
+    const tgt = h("input", { type: "text", spellcheck: "false", autocomplete: "off", placeholder: t("Leeg = elke site eigen IP"), "aria-label": t("Eén IP voor de hele groep") });
+    tgt.value = g.target || "";
+    const tmsg = h("span", { class: "err" });
+    tgt.onchange = () => {
+      const raw = tgt.value.trim();
+      const v = isIp(raw) ? raw : raw.toLowerCase();
+      if (raw && !isTarget(v)) { tmsg.textContent = t("Ongeldig IP-adres of hostnaam."); return; }
+      tmsg.textContent = "";
+      mutateGroups((gs) => gs.map((x) => { if (x.id !== g.id) return x; const n = { ...x }; if (v) n.target = v; else delete n.target; return n; }));
+    };
+    const [lab, tip] = withTip(h("span", {}, t("Eén IP voor de hele groep")),
+      t("Vul een IP of hostnaam in om alle sites in deze groep in één keer daarheen te sturen. Handig bij een verhuizing: één veld aanpassen en de hele groep wisselt. Laat leeg om per site een eigen IP te gebruiken; die eigen IP's blijven bewaard."));
+    box.append(h("div", { class: "field" }, lab, tip, tgt, tmsg));
+  }
   for (const extra of groupEditorExtras) { const n = extra(g, state); if (n) box.append(n); }
   const row = h("div", { class: "row wrap" });
   if (!g.sub && g.id !== DEFAULT_GROUP) {
@@ -427,6 +471,7 @@ function renderGroups(state, q) {
     const sec = h("section", { class: "group" + (on ? "" : " goff"), style: `--gc:${g.color}` });
     const listId = "gl-" + g.id;
     const tags = [];
+    if (g.target) tags.push(h("span", { class: "gtag gtarget", title: t("Alle sites in deze groep gaan naar {ip}", { ip: g.target }) }, "→ " + g.target));
     if (g.sub) tags.push(h("span", { class: "gtag" }, t("abonnement")));
     if (g.noCache) tags.push(h("span", { class: "gtag" }, t("geen cache")));
     if (g.auth?.user) tags.push(h("span", { class: "gtag" }, t("Basic-auth")));
@@ -448,7 +493,7 @@ function renderGroups(state, q) {
       const next = setGroupEnabled(s, g.id, swIn.checked);
       update(swIn.checked ? { groups: next.groups, enabled: true } : { groups: next.groups });
     };
-    const gear = h("button", { class: "icon", title: t("Groep instellen"), "aria-label": t("Groep {g} instellen", { g: gname(g, state) }), "aria-expanded": String(editGroup === g.id) });
+    const gear = h("button", { class: "icon gear", title: t("Groep instellen"), "aria-label": t("Groep {g} instellen", { g: gname(g, state) }), "aria-expanded": String(editGroup === g.id) });
     gear.append(gearIcon());
     gear.onclick = () => { editGroup = editGroup === g.id ? null : g.id; render(false); };
     sec.append(h("div", { class: "ghead" }, toggle, sw, gear));
@@ -465,11 +510,13 @@ function renderGroups(state, q) {
 function gearIcon() {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "14"); svg.setAttribute("height", "14"); svg.setAttribute("viewBox", "0 0 16 16"); svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("width", "16"); svg.setAttribute("height", "16"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "2"); svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+  const c = document.createElementNS(ns, "circle");
+  c.setAttribute("cx", "12"); c.setAttribute("cy", "12"); c.setAttribute("r", "3");
   const p = document.createElementNS(ns, "path");
-  p.setAttribute("fill", "currentColor");
-  p.setAttribute("d", "M2 4h7.3a2 2 0 0 1 3.4 0H14v1.5h-1.3a2 2 0 0 1-3.4 0H2zm0 6.5h1.3a2 2 0 0 1 3.4 0H14V12H6.7a2 2 0 0 1-3.4 0H2z");
-  svg.append(p);
+  p.setAttribute("d", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z");
+  svg.append(c, p);
   return svg;
 }
 
@@ -502,6 +549,17 @@ function fillAddGroup(state) {
   sel.replaceChildren(...groupSelect(state, keep, "").children);
   sel.value = state.groups.some((g) => g.id === keep && !g.sub) ? keep : DEFAULT_GROUP;
   sel.hidden = state.groups.filter((g) => !g.sub).length < 2;
+  addTargetHint(state);
+}
+// Groep met één IP: het IP-veld is dan niet nodig (de site volgt het IP van de groep).
+function addTargetHint(state) {
+  const g = state.groups.find((x) => x.id === ($("addGroup").hidden ? DEFAULT_GROUP : $("addGroup").value));
+  const gt = g?.target || "";
+  $("ip").required = !gt;
+  $("ip").disabled = !!gt;
+  if (gt) $("ip").value = "";
+  $("ip").placeholder = gt ? "→ " + gt : t("1.2.3.4 of server.nl");
+  $("ip").title = gt ? t("IP van de groep: {ip}", { ip: gt }) : "";
 }
 
 async function render(refresh = true) {
@@ -510,9 +568,9 @@ async function render(refresh = true) {
   $("autoReload").checked = state.autoReload;
   $("sideDefault").checked = state.sideDefault;
   $("exclusive").checked = state.exclusiveGroups;
+  $("wwwPair").checked = state.wwwPair;
   const total = allRules(state).length;
   $("empty").hidden = total > 0;
-  $("bulk").hidden = state.rules.length < 2;
   $("filter").hidden = total < 7;
   const q = $("filter").hidden ? "" : $("filter").value.trim().toLowerCase();
   renderGroups(state, q);
@@ -530,6 +588,7 @@ const renderHooks = [];
 
 $("master").onchange = () => update({ enabled: $("master").checked });
 $("filter").oninput = () => render(false);
+$("wwwPair").onchange = () => update({ wwwPair: $("wwwPair").checked });
 $("autoReload").onchange = () => chrome.storage.local.set({ autoReload: $("autoReload").checked });
 $("sideDefault").onchange = () => chrome.storage.local.set({ sideDefault: $("sideDefault").checked });
 $("exclusive").onchange = async () => {
@@ -552,12 +611,14 @@ $("newGroup").onclick = async () => {
   update({ groups: [...s.groups, { id, name, color, enabled: !s.exclusiveGroups, noCache: false, auth: null, headers: [] }] });
   setTimeout(() => document.querySelector(`#ged-${id} input`)?.select(), 50);
 };
-$("addGroup").onchange = () => chrome.storage.local.set({ lastGroup: $("addGroup").value });
+$("addGroup").onchange = async () => { chrome.storage.local.set({ lastGroup: $("addGroup").value }); addTargetHint(await load()); };
 
 $("add").onsubmit = async (e) => {
   e.preventDefault();
   const host = $("host").value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:?#].*$/, "");
-  const raw = $("ip").value.trim();
+  const s0 = await load();
+  const gSel = s0.groups.find((x) => x.id === ($("addGroup").hidden ? DEFAULT_GROUP : $("addGroup").value));
+  const raw = $("ip").value.trim() || gSel?.target || "";
   const ip = isIp(raw) ? raw : raw.toLowerCase();
   if (!isHost(host)) { errMsg(t("Ongeldig domein.")); return; }
   if (!isTarget(ip)) { errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
@@ -575,15 +636,6 @@ $("add").onsubmit = async (e) => {
   const g = s.groups.find((x) => x.id === group);
   const groups = g && !g.enabled ? setGroupEnabled(s, group, true).groups : s.groups;
   update({ rules: next, groups, enabled: true, lastIp: ip });
-};
-
-$("bulkBtn").onclick = async () => {
-  const raw = $("bulkIp").value.trim();
-  const ip = isIp(raw) ? raw : raw.toLowerCase();
-  if (!isTarget(ip)) { errMsg(t("Ongeldig IP-adres of hostnaam.")); return; }
-  errMsg("");
-  $("bulkIp").value = "";
-  mutateRules((rules) => rules.map((r) => ({ ...r, ip })));
 };
 
 // --- Chrome-commando ---
@@ -1158,15 +1210,14 @@ $("recheck").onclick = () => render();
 
 // --- Verzoek-headers per groep (declarativeNetRequest) ---
 groupEditorExtras.push((g, state) => {
-  const box = h("div", { class: "hdrs" }, h("h3", {}, t("Verzoek-headers voor deze groep")));
+  const box = h("details", { class: "hdrs", open: groupHasHeaders(g) }, h("summary", {}, t("Verzoek-headers en wachtwoord (geavanceerd)")));
   const setG = (patch) => mutateGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, ...patch } : x)));
   const msg = h("p", { class: "small", role: "status" });
 
   const nc = h("input", { type: "checkbox" });
   nc.checked = g.noCache;
   nc.onchange = () => setG({ noCache: nc.checked });
-  box.append(h("label", { class: "check" }, nc, t("Geen cache (Cache-Control en Pragma: no-cache)")),
-    h("p", { class: "small indent" }, t("Vraagt browser en server om verse inhoud. Een CDN zoals Cloudflare kan toch een kopie uit zijn cache geven; omzeilen lukt meestal alleen met een cache-busting query (?v=123) of een CDN-specifieke header of cookie (zie je CDN).")));
+  box.append(...withTip(h("label", { class: "check" }, nc, t("Geen cache (Cache-Control en Pragma: no-cache)")), t("Vraagt browser en server om verse inhoud. Een CDN zoals Cloudflare kan toch een kopie uit zijn cache geven; omzeilen lukt meestal alleen met een cache-busting query (?v=123) of een CDN-specifieke header of cookie (zie je CDN).")));
 
   const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", placeholder: t("Gebruikersnaam"), "aria-label": t("Gebruikersnaam voor Basic-auth") });
   const pass = h("input", { type: "password", autocomplete: "new-password", placeholder: t("Wachtwoord"), "aria-label": t("Wachtwoord voor Basic-auth") });
@@ -1181,9 +1232,8 @@ groupEditorExtras.push((g, state) => {
   };
   const clear = h("button", { type: "button", class: "secondary", hidden: !g.auth }, t("Wissen"));
   clear.onclick = () => setG({ auth: null });
-  box.append(h("span", { class: "sublabel" }, t("Basic-auth (staging achter een wachtwoord)")),
-    h("div", { class: "authRow" }, user, pass), h("div", { class: "row" }, saveAuth, clear),
-    h("p", { class: "small" }, t("Stuurt Authorization: Basic alleen naar de hosts van deze groep. Helpt alleen bij sites met HTTP Basic Auth (het inlogvenster van de browser), niet bij WordPress- of app-logins. Het wachtwoord staat alleen lokaal in je browser: niet in sync en niet in een back-up, tenzij je dat bij de back-up zelf aanvinkt.")));
+  box.append(...withTip(h("span", { class: "sublabel" }, t("Basic-auth (staging achter een wachtwoord)")), t("Stuurt Authorization: Basic alleen naar de hosts van deze groep. Helpt alleen bij sites met HTTP Basic Auth (het inlogvenster van de browser), niet bij WordPress- of app-logins. Het wachtwoord staat alleen lokaal in je browser: niet in sync en niet in een back-up, tenzij je dat bij de back-up zelf aanvinkt.")),
+    h("div", { class: "authRow" }, user, pass), h("div", { class: "row" }, saveAuth, clear));
 
   const ta = h("textarea", { rows: "3", spellcheck: "false", placeholder: "X-Debug: 1\nX-Staging-Bypass: geheim", "aria-label": t("Eigen headers, één per regel: Naam: waarde") });
   ta.value = (g.headers || []).map((x) => `${x.name}: ${x.value}`).join("\n");
@@ -1203,8 +1253,7 @@ groupEditorExtras.push((g, state) => {
     msg.textContent = "";
     setG({ headers: out });
   };
-  box.append(h("span", { class: "sublabel" }, t("Eigen headers")), ta, h("div", { class: "row" }, saveH),
-    h("p", { class: "small" }, t("Eén per regel: Naam: waarde. Niet toegestaan: Host, Cookie, Authorization (gebruik Basic-auth hierboven), Origin, Referer, hop-by-hop-headers (Connection, Upgrade, Transfer-Encoding e.d.), Sec-* en Proxy-*.")));
+  box.append(...withTip(h("span", { class: "sublabel" }, t("Eigen headers")), t("Eén per regel: Naam: waarde. Niet toegestaan: Host, Cookie, Authorization (gebruik Basic-auth hierboven), Origin, Referer, hop-by-hop-headers (Connection, Upgrade, Transfer-Encoding e.d.), Sec-* en Proxy-*.")), ta, h("div", { class: "row" }, saveH));
 
   // Toegang: Chrome zet headers alleen op hosts waarvoor de extensie toegang heeft.
   if (groupHasHeaders(g)) {
@@ -1219,17 +1268,18 @@ groupEditorExtras.push((g, state) => {
       b.onclick = async () => { if (await chrome.permissions.request({ origins })) render(false); };
       perm.append(h("div", { class: "row" }, b));
     });
-    box.append(h("p", { class: "small" }, t("Navigeer je vanaf een andere site naar deze hosts (bijvoorbeeld een link in webmail), dan zet Chrome de headers alleen met toegang tot alle sites (IP-weergave).")));
+    box.append(...withTip(h("span", { class: "sublabel" }, t("Werkt het niet altijd?")), t("Navigeer je vanaf een andere site naar deze hosts (bijvoorbeeld een link in webmail), dan zet Chrome de headers alleen met toegang tot alle sites (IP-weergave).")));
   }
   box.append(msg);
   return box;
 });
 
+enhanceTips();
 tab = await getTab();
 render();
 // popup.html#more (of #more-import vanuit de popup): direct naar Meer, eventueel met de bestandskiezer.
 if (location.hash.startsWith("#more")) {
   document.body.classList.add("tabmode");
   showView("more");
-  if (location.hash === "#more-import") setTimeout(() => $("backupCard").scrollIntoView(), 300);
+  if (location.hash === "#more-import") { $("backupCard").open = true; setTimeout(() => $("backupCard").scrollIntoView(), 300); }
 }

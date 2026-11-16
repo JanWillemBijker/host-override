@@ -131,7 +131,7 @@ import { isHost, isIp, isTarget, isTargetHost, validRules, activeRules, matchRul
 export { isHost, isIp, isTarget, isTargetHost, validRules, activeRules, matchRule, formatHosts, parseHosts, normState };
 
 // Alles wat de extensie over regels en groepen bewaart, genormaliseerd (migreert ook oude losse regels).
-export const STATE_KEYS = ["enabled", "rules", "groups", "subs", "exclusiveGroups"];
+export const STATE_KEYS = ["enabled", "rules", "groups", "subs", "exclusiveGroups", "wwwPair"];
 export async function loadState() {
   return normState(await chrome.storage.local.get(STATE_KEYS));
 }

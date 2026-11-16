@@ -122,7 +122,7 @@ async function applyPanel() {
 applyPanel();
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.enabled || changes.rules || changes.groups || changes.subs)) apply();
+  if (area === "local" && (changes.enabled || changes.rules || changes.groups || changes.subs || changes.wwwPair)) apply();
   if (area === "local" && Object.keys(changes).some((k) => SYNC_WATCH.has(k))) schedulePush();
   if (area === "local" && changes.syncOn?.newValue === true) syncEnable();
   if (area === "sync" && changes["ho:meta"]) syncPull("replace");

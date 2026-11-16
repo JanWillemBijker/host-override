@@ -36,7 +36,8 @@ Vanuit deze map kan het ook met `./install.sh <extensie-id> <geheim>` (macOS/Lin
 - **Indicator in de pagina** (onder Meer): een hoekbadge, gekleurde balk of rand om de pagina als de site niet van het live IP komt. Instelbaar: wanneer (Host Override-regel en hosts-bestand standaard aan, "wijkt af van publieke DNS" standaard uit), stijl, positie, kleur, tekst (`{ip}`, `{host}`, `{source}`; standaard `TEST · {ip}`), grootte, dekking, IP tonen, bijna onzichtbaar bij muis erover en klik om te verbergen voor die tab. Met live voorbeeld; open tabs passen zich direct aan. Vereist IP-weergave.
 - **Open in incognito** opent dezelfde pagina live, om te vergelijken.
 - **Overschrijf dit domein** vult het formulier met de huidige site.
-- Een regel is `example.nl` of `*.example.nl` (ook alle subdomeinen) met een IP. Het IP pas je in de lijst direct aan. Bij twee of meer regels kun je alle IP's tegelijk wisselen.
+- Een regel is `example.nl` of `*.example.nl` (ook alle subdomeinen) met een IP. Het IP pas je in de lijst direct aan. `example.nl` geldt ook voor `www.example.nl` en andersom (uit te zetten onder Meer > Instellingen; een eigen regel voor de andere variant gaat altijd voor).
+- **Eén IP voor een hele groep:** in de groepsinstellingen (tandwiel) vul je één IP of hostnaam in; alle sites in die groep gaan daarheen. Het eigen IP per site blijft bewaard voor als je het groeps-IP weer leegmaakt. In het hosts-formaat staat het als `# group: Naam #kleur ip=10.0.0.5`.
 - De tab wordt automatisch herladen (zonder cache) als een wijziging die tab raakt. Uit te zetten onderin.
 - Sneltoets **Alt+Shift+H** zet alles aan of uit (wijzigen via `chrome://extensions/shortcuts`).
 - **Testvenster** opent met één klik een tweede Chrome (eigen profiel `chrome-test`) dat jouw regels gebruikt, met de huidige pagina. Handig voor twee vensters naast elkaar. De helper start dat venster. Lukt dat niet, dan kopieer je het commando (macOS, Windows cmd of PowerShell, Linux) en plak je het zelf in je terminal. Het commando werkt ook zonder helper.
@@ -173,3 +174,8 @@ Binary: `~/.host-override/bin/host-override-helper --uninstall` (Windows: `%USER
 - **Welkomstpagina:** twee duidelijke installatiemanieren naast elkaar: de helper downloaden (geen Node.js nodig) of één commando in Terminal/PowerShell (Node.js nodig, geen koppelcode).
 - **Hulp bij de beveiligingsmelding:** zolang de helper niet ondertekend is, staan bij het openen stap-voor-stap instructies voor macOS en Windows, plus een kopieerbaar commando dat de blokkade weghaalt en de helper meteen opent. Voor Linux een kopieerbaar startcommando.
 - Helper-downloads staan nu in de GitHub-release (`v1.7.0`); de link `releases/latest` wijst daar naartoe.
+
+## Wat is er nieuw in 1.8.0
+- **Eén IP voor een hele groep:** zet in de groepsinstellingen één IP of hostnaam, en alle sites in de groep gaan daarheen. Nieuwe sites in zo'n groep hebben geen eigen IP nodig. Vervangt de oude balk "Alle eigen regels naar IP".
+- **www en zonder www samen:** een regel voor `voorbeeld.nl` geldt ook voor `www.voorbeeld.nl` en andersom (standaard aan, onder Meer > Instellingen).
+- **Rustiger en duidelijker:** uitleg zit achter een (i)-knop in plaats van eronder; de tab Meer bestaat uit inklapbare onderdelen met een korte omschrijving; groepsinstellingen achter een echt tandwiel, headers en Basic-auth onder "geavanceerd"; een potlood voor notitie en groep; kopje "Site toevoegen".

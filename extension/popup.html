@@ -90,12 +90,8 @@
     <div id="empty" class="empty" hidden>Nog geen regels. Voeg hieronder een domein en IP toe.</div>
     <div class="gtools"><button id="newGroup" class="link" type="button">+ Nieuwe groep</button></div>
 
-    <div id="bulk" class="bulk" hidden>
-      <input type="text" id="bulkIp" placeholder="Alle eigen regels naar IP..." spellcheck="false" aria-label="IP voor alle eigen regels">
-      <button id="bulkBtn" class="secondary">Toepassen</button>
-    </div>
-
     <form id="add">
+      <span class="formtitle">Site toevoegen</span>
       <input id="host" placeholder="example.nl  of  *.example.nl" autocomplete="off" spellcheck="false" required aria-label="Domein">
       <input id="ip" placeholder="1.2.3.4 of server.nl" autocomplete="off" spellcheck="false" required aria-label="IP-adres of hostnaam">
       <input id="note" class="note" placeholder="Notitie (optioneel)" maxlength="120" autocomplete="off" aria-label="Notitie">
@@ -122,7 +118,8 @@
       <button id="cCopy" class="secondary">Kopieer overzicht</button>
       <label class="check cfilter"><input type="checkbox" id="cOnlyDomain"> Alleen dit domein</label>
     </div>
-    <p class="small">Toont alle hosts waar deze tab sinds de laatste paginaweergave iets van laadde, met IP en type. Oranje: komt nog van de live server terwijl een host van hetzelfde domein een regel heeft (bijvoorbeeld www, cdn of api vergeten). Het domein wordt bij benadering bepaald.</p>
+    <span class="sublabel">Wat zie je hier?</span>
+    <p class="tip">Toont alle hosts waar deze tab sinds de laatste paginaweergave iets van laadde, met IP en type. Oranje: komt nog van de live server terwijl een host van hetzelfde domein een regel heeft (bijvoorbeeld www, cdn of api vergeten). Het domein wordt bij benadering bepaald.</p>
   </div>
 
   <div id="viewDns" role="tabpanel" aria-labelledby="tabDns" hidden>
@@ -150,8 +147,8 @@
   </div>
 
   <div id="viewMore" role="tabpanel" aria-labelledby="tabMore" hidden>
-    <section class="card">
-      <span class="label">Instellingen</span>
+    <details class="msec" open>
+      <summary><span class="mtitle">Instellingen</span><span class="msub">Taal, herladen, groepen, zijpaneel</span></summary>
       <label class="field">Taal
         <select id="langSel" aria-label="Taal">
           <option value="auto">Automatisch (browsertaal)</option>
@@ -160,7 +157,10 @@
         </select>
       </label>
       <label class="check"><input type="checkbox" id="autoReload"> Tab automatisch herladen na een wijziging</label>
+      <label class="check"><input type="checkbox" id="wwwPair"> www en zonder www samen</label>
+      <p class="tip">Een regel voor voorbeeld.nl geldt dan ook voor www.voorbeeld.nl, en andersom. Wil je ze apart, geef de andere variant dan een eigen regel of zet dit uit. Met *.voorbeeld.nl pak je alle subdomeinen.</p>
       <label class="check"><input type="checkbox" id="exclusive"> Maar één groep tegelijk actief</label>
+      <p class="tip">Zet je een groep aan, dan gaan de andere groepen vanzelf uit. Handig als groepen dezelfde domeinen bevatten (bijvoorbeeld staging en acceptatie).</p>
       <label class="field">Publieke DNS voor het live IP
         <select id="dohSel" aria-label="Publieke DNS voor het live IP">
           <option value="cloudflare">Cloudflare (standaard)</option>
@@ -172,10 +172,10 @@
       <p id="dohNote" class="small"></p>
       <label class="check"><input type="checkbox" id="sideDefault"> Open altijd als zijpaneel</label>
       <p class="small" data-th>Sneltoets: Alt+Shift+H zet alles aan of uit. <a href="welcome.html" target="_blank">Installatie-uitleg</a></p>
-    </section>
+    </details>
 
-    <section id="indCard" class="card">
-      <span class="label">Indicator in de pagina</span>
+    <details id="indCard" class="msec">
+      <summary><span class="mtitle">Indicator in de pagina</span><span class="msub">Label of rand als je niet op live zit</span></summary>
       <label class="check"><input type="checkbox" id="pageBadge"> Toon een indicator als de site niet het live IP gebruikt</label>
       <div id="indPerm" class="help" hidden>
         <span>Hiervoor is toegang tot alle sites nodig (IP-weergave). De extensie leest alleen het IP van de pagina, niet de inhoud.</span>
@@ -186,7 +186,7 @@
         <label class="check"><input type="checkbox" id="indOnRule"> Via een Host Override-regel</label>
         <label class="check"><input type="checkbox" id="indOnHosts"> Via je hosts-bestand (vereist de helper)</label>
         <label class="check"><input type="checkbox" id="indOnDiffers"> Als het IP afwijkt van publieke DNS</label>
-        <p class="small indent">Stuurt dan de hostnaam van elke pagina die je opent naar de gekozen DNS-dienst (standaard Cloudflare). Kan vals alarm geven bij CDN's, VPN of een proxy; afwijkingen binnen hetzelfde netwerkblok worden genegeerd.</p>
+        <p class="tip">Stuurt dan de hostnaam van elke pagina die je opent naar de gekozen DNS-dienst (standaard Cloudflare). Kan vals alarm geven bij CDN's, VPN of een proxy; afwijkingen binnen hetzelfde netwerkblok worden genegeerd.</p>
         <div class="grid2">
           <label class="field">Stijl
             <select id="indStyle">
@@ -213,7 +213,7 @@
         <label class="field">Tekst
           <input id="indText" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="TEST · {ip}">
         </label>
-        <p class="small">Gebruik {ip}, {host}, {group} (naam van de groep) en {source} (Host Override, hosts-bestand of afwijkende DNS).</p>
+        <p class="tip">Gebruik {ip}, {host}, {group} (naam van de groep) en {source} (Host Override, hosts-bestand of afwijkende DNS).</p>
         <label class="check"><input type="checkbox" id="indGroupColor"> Kleur van de groep gebruiken bij een Host Override-regel</label>
         <label class="check"><input type="checkbox" id="indShowIp"> Toon het IP</label>
         <label class="check"><input type="checkbox" id="indHideHover"> Bijna onzichtbaar als de muis erover gaat</label>
@@ -223,10 +223,10 @@
           <div class="pv-bar"></div><div class="pv-line w70"></div><div class="pv-line w90"></div><div class="pv-line w50"></div><div class="pv-line w80"></div>
         </div>
       </div>
-    </section>
+    </details>
 
-    <section id="hostsCard" class="card">
-      <span class="label">Hosts-bestand (alleen lezen)</span>
+    <details id="hostsCard" class="msec">
+      <summary><span class="mtitle">Hosts-bestand</span><span class="msub">Bekijken en importeren (alleen lezen)</span></summary>
       <p id="hostsMeta" class="small"></p>
       <label class="check"><input type="checkbox" id="hostsOnly" checked> Alleen overrides tonen</label>
       <div id="hostsList" class="hostsList"></div>
@@ -236,22 +236,36 @@
         <button id="hostsImport" class="primary mini-primary">Importeer in Host Override</button>
       </div>
       <div id="hostsMsg" class="small" role="status"></div>
-      <p class="small">Host Override leest dit bestand alleen (via de helper) en past het nooit aan. Bewerken kan alleen met beheerdersrechten (macOS en Linux: sudo, Windows: Kladblok als administrator). Het hosts-bestand geldt voor de hele computer, ook incognito; regels in Host Override alleen voor dit Chrome-profiel.</p>
-    </section>
+      <span class="sublabel">Hoe werkt dit?</span>
+      <p class="tip">Host Override leest dit bestand alleen (via de helper) en past het nooit aan. Bewerken kan alleen met beheerdersrechten (macOS en Linux: sudo, Windows: Kladblok als administrator). Het hosts-bestand geldt voor de hele computer, ook incognito; regels in Host Override alleen voor dit Chrome-profiel.</p>
+    </details>
 
-    <section id="cmdPanel" class="card">
-      <span class="label">Apart testvenster met deze regels</span>
+    <details id="cmdPanel" class="msec">
+      <summary><span class="mtitle">Testvenster</span><span class="msub">Tweede Chrome met deze regels, naast live</span></summary>
       <select id="os" aria-label="Besturingssysteem"></select>
       <textarea id="cmdText" rows="6" spellcheck="false" readonly aria-label="Chrome-commando"></textarea>
       <div class="row">
         <button id="openWin" class="primary">Open testvenster</button>
         <button id="copyCmd" class="secondary">Kopieer commando</button>
       </div>
-      <p class="small">Opent een tweede Chrome met een eigen profiel (chrome-test) dat de regels gebruikt, met de huidige pagina. Sluit dat venster om te stoppen. Lukt openen niet, plak dan het commando in <span id="cmdWhere">Terminal</span> en druk op Enter. Het commando werkt ook zonder helper.</p>
-    </section>
+      <span class="sublabel">Hoe werkt dit?</span>
+      <p class="tip">Opent een tweede Chrome met een eigen profiel (chrome-test) dat de regels gebruikt, met de huidige pagina. Sluit dat venster om te stoppen. Lukt openen niet, plak dan het commando in <span id="cmdWhere">Terminal</span> en druk op Enter. Het commando werkt ook zonder helper.</p>
+    </details>
 
-    <section id="subCard" class="card">
-      <span class="label">Abonneren op een regellijst</span>
+    <details id="share" class="msec">
+      <summary><span class="mtitle">Regels delen</span><span class="msub">Kopiëren of plakken van een collega</span></summary>
+      <textarea id="hostsText" rows="5" spellcheck="false" placeholder="1.2.3.4 voorbeeld.nl www.voorbeeld.nl" aria-label="Regels in hosts-formaat"></textarea>
+      <div class="row">
+        <button id="copyHosts" class="secondary">Kopieer</button>
+        <button id="applyHosts" class="primary">Toevoegen uit tekst</button>
+      </div>
+      <div id="shareMsg" class="small" role="status"></div>
+      <span class="sublabel">Hoe werkt dit?</span>
+      <p class="tip" data-th>Plak regels van een collega en kies "Toevoegen uit tekst". Werkt ook met echte hosts-regels. Groepen staan erin als <code># group: Naam #kleur</code>, notities als <code># notitie</code> achter de regel.</p>
+    </details>
+
+    <details id="subCard" class="msec">
+      <summary><span class="mtitle">Abonneren op een regellijst</span><span class="msub">Regels van een URL, automatisch bijgewerkt</span></summary>
       <div class="subForm">
         <input id="subUrl" type="url" placeholder="https://voorbeeld.nl/regels.txt" autocomplete="off" spellcheck="false" aria-label="URL van de regellijst">
         <select id="subInt" aria-label="Vernieuwen">
@@ -263,22 +277,23 @@
       </div>
       <div id="subMsg" class="small" role="status"></div>
       <div id="subList" class="subList"></div>
-      <p class="small" data-th>Hosts-formaat, optioneel met <code># group: Naam #kleur</code>. Alleen https, max 256 KB en 2000 regels. De regels zijn alleen-lezen en komen in een eigen groep, die eerst uit staat. Een lijst kan elk domein omleiden: abonneer alleen op lijsten die je vertrouwt. Chrome vraagt toegang tot alleen die ene website.</p>
-    </section>
+      <span class="sublabel">Hoe werkt dit?</span>
+      <p class="tip" data-th>Hosts-formaat, optioneel met <code># group: Naam #kleur</code>. Alleen https, max 256 KB en 2000 regels. De regels zijn alleen-lezen en komen in een eigen groep, die eerst uit staat. Een lijst kan elk domein omleiden: abonneer alleen op lijsten die je vertrouwt. Chrome vraagt toegang tot alleen die ene website.</p>
+    </details>
 
-    <section id="syncCard" class="card">
-      <span class="label">Synchroniseren</span>
+    <details id="syncCard" class="msec">
+      <summary><span class="mtitle">Synchroniseren</span><span class="msub">Tussen je Chrome-installaties</span></summary>
       <label class="check"><input type="checkbox" id="syncOn"> Regels, groepen en instellingen synchroniseren tussen je Chrome-installaties</label>
       <p id="syncState" class="small" role="status"></p>
       <div class="row"><button id="syncNow" class="secondary">Nu synchroniseren</button></div>
-      <p class="small">Via de sync-opslag van Chrome (je Google-account, als Chrome-synchronisatie aan staat). Gaat mee: eigen regels, groepen, notities, abonnementen (alleen de URL) en instellingen. Gaat nooit mee: de helper-sleutel, Basic-auth-wachtwoorden en de aan/uit-schakelaar. Maximaal ongeveer 90 KB. Bij de eerste keer aanzetten worden beide kanten samengevoegd.</p>
-    </section>
+      <span class="sublabel">Wat gaat er mee?</span>
+      <p class="tip">Via de sync-opslag van Chrome (je Google-account, als Chrome-synchronisatie aan staat). Gaat mee: eigen regels, groepen, notities, abonnementen (alleen de URL) en instellingen. Gaat nooit mee: de helper-sleutel, Basic-auth-wachtwoorden en de aan/uit-schakelaar. Maximaal ongeveer 90 KB. Bij de eerste keer aanzetten worden beide kanten samengevoegd.</p>
+    </details>
 
-    <section id="backupCard" class="card">
-      <span class="label">Back-up</span>
-      <p class="small">Alles in één JSON-bestand: regels, groepen, notities, abonnementen (URL) en instellingen.</p>
+    <details id="backupCard" class="msec">
+      <summary><span class="mtitle">Back-up</span><span class="msub">Alles in één JSON-bestand</span></summary>
       <label class="check"><input type="checkbox" id="bkSecrets"> Ook de helper-sleutel en Basic-auth-wachtwoorden opnemen</label>
-      <p class="small indent">Alleen voor een back-up die je veilig bewaart: met de sleutel kan een programma op je computer je helper aansturen.</p>
+      <p class="tip">Alleen voor een back-up die je veilig bewaart: met de sleutel kan een programma op je computer je helper aansturen.</p>
       <div class="row wrap">
         <button id="bkExport" class="secondary">Exporteren (JSON)</button>
         <button id="bkImport" class="secondary">Importeren...</button>
@@ -286,18 +301,7 @@
       </div>
       <div id="bkPreview" class="help" hidden></div>
       <div id="bkMsg" class="small" role="status"></div>
-    </section>
-
-    <section id="share" class="card">
-      <span class="label">Regels delen (hosts-formaat)</span>
-      <textarea id="hostsText" rows="5" spellcheck="false" placeholder="1.2.3.4 voorbeeld.nl www.voorbeeld.nl" aria-label="Regels in hosts-formaat"></textarea>
-      <div class="row">
-        <button id="copyHosts" class="secondary">Kopieer</button>
-        <button id="applyHosts" class="primary">Toevoegen uit tekst</button>
-      </div>
-      <div id="shareMsg" class="small" role="status"></div>
-      <p class="small" data-th>Plak regels van een collega en kies "Toevoegen uit tekst". Werkt ook met echte hosts-regels. Groepen staan erin als <code># group: Naam #kleur</code>, notities als <code># notitie</code> achter de regel.</p>
-    </section>
+    </details>
     <div id="moreErr" class="err" role="alert"></div>
   </div>
 

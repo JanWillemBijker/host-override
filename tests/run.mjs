@@ -166,7 +166,7 @@ await test("migratie: losse regels (1.7) komen in de standaardgroep, ongeldige v
   const s = M.normState({ enabled: true, rules: [{ host: "A.nl", ip: "1.2.3.4" }, { host: "b.nl", ip: "999.1.1.1" }, { host: "c.nl", ip: "x;rm -rf" }, { host: "a.nl", ip: "5.6.7.8" }] });
   assert.equal(s.groups.length, 1); assert.equal(s.groups[0].id, "default");
   assert.deepEqual(s.rules, [{ host: "a.nl", ip: "1.2.3.4", enabled: true, group: "default" }]);
-  assert.equal(M.activeRules({ enabled: true, rules: [{ host: "a.nl", ip: "1.2.3.4" }] }).length, 1, "oude toestand zonder groepen werkt");
+  assert.equal(M.activeRules({ enabled: true, wwwPair: false, rules: [{ host: "a.nl", ip: "1.2.3.4" }] }).length, 1, "oude toestand zonder groepen werkt");
 });
 await test("doel: IP of strikte hostnaam; geen wildcard, geen numerieke TLD, geen shell-tekens", () => {
   for (const ok of ["1.2.3.4", "2001:db8::1", "server123.hostingpartij.nl", "localhost", "a-b.example.co.uk"]) assert.ok(M.isTarget(ok), ok);
@@ -174,7 +174,7 @@ await test("doel: IP of strikte hostnaam; geen wildcard, geen numerieke TLD, gee
   assert.equal(M.targetKind("srv.x.nl"), "host"); assert.equal(M.targetKind("1.2.3.4"), "ip");
 });
 await test("groep uit = regels uit; hoofdschakelaar uit = alles uit; eerste treffer wint", () => {
-  const s = M.normState({ enabled: true, groups: [{ id: "default" }, { id: "stg", name: "Klant X – staging", color: "#1971c2", enabled: false }],
+  const s = M.normState({ enabled: true, wwwPair: false, groups: [{ id: "default" }, { id: "stg", name: "Klant X – staging", color: "#1971c2", enabled: false }],
     rules: [{ host: "a.nl", ip: "1.1.1.1", group: "stg" }, { host: "*.b.nl", ip: "2.2.2.2" }, { host: "c.b.nl", ip: "3.3.3.3" }] });
   assert.deepEqual(M.activeRules(s).map((r) => r.host), ["*.b.nl", "c.b.nl"]);
   assert.equal(M.matchRule(M.activeRules(s), "c.b.nl").ip, "2.2.2.2");
@@ -194,6 +194,52 @@ await test("notitie en groepsnaam: stuurtekens weg, ingekort", () => {
   const s = M.normState({ groups: [{ id: "default", name: "A\nB\u0000" + "x".repeat(100) }], rules: [{ host: "a.nl", ip: "1.1.1.1", note: "regel1\r\nregel2" + "y".repeat(200) }] });
   assert.ok(!/[\n\r\u0000]/.test(s.groups[0].name) && s.groups[0].name.length <= M.NAME_MAX);
   assert.ok(s.rules[0].note.startsWith("regel1 regel2") && s.rules[0].note.length <= M.NOTE_MAX);
+});
+await test("www en zonder www: één regel geldt voor beide, expliciete regels en wildcards gaan voor, uit te zetten", () => {
+  const base = { enabled: true, rules: [{ host: "okidooutlet.nl", ip: "1.1.1.1" }, { host: "www.b.nl", ip: "2.2.2.2" },
+    { host: "c.nl", ip: "3.3.3.3" }, { host: "www.c.nl", ip: "4.4.4.4", enabled: false }, { host: "*.d.nl", ip: "5.5.5.5" }, { host: "localhost", ip: "6.6.6.6" }] };
+  const act = M.activeRules(M.normState(base));
+  assert.equal(M.matchRule(act, "www.okidooutlet.nl").ip, "1.1.1.1");
+  assert.equal(M.matchRule(act, "b.nl").ip, "2.2.2.2");
+  assert.equal(M.matchRule(act, "www.c.nl"), null); // eigen (uitgezette) regel wint
+  assert.equal(M.matchRule(act, "www.d.nl").ip, "5.5.5.5");
+  assert.ok(!act.some((r) => r.host === "www.localhost" || r.host === "www.*.d.nl"));
+  assert.equal(M.wwwTwin("www.nl"), null);
+  assert.equal(M.wwwTwin("1.2.3.4"), null);
+  const off = M.activeRules(M.normState({ ...base, wwwPair: false }));
+  assert.equal(M.matchRule(off, "www.okidooutlet.nl"), null);
+  // Groep uit: tweeling ook uit. Groeps-IP: tweeling volgt.
+  const g = M.normState({ enabled: true, groups: [{ id: "default" }, { id: "g1", name: "S", target: "9.9.9.9" }], rules: [{ host: "e.nl", ip: "1.1.1.1", group: "g1" }] });
+  assert.equal(M.matchRule(M.activeRules(g), "www.e.nl").ip, "9.9.9.9");
+  assert.ok(M.groupOrigins(g, "g1").includes("*://www.e.nl/*"));
+});
+await test("groeps-IP: alle regels in de groep gaan naar één doel, eigen IP blijft bewaard, heen en terug via hosts-formaat", () => {
+  const s = M.normState({ enabled: true, groups: [{ id: "default" }, { id: "g1", name: "Staging", color: "#1971c2", target: "10.0.0.5" }, { id: "g2", name: "Fout", target: "rommel doel" }],
+    rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "b.nl", ip: "2.2.2.2", group: "g1" }, { host: "*.c.nl", ip: "3.3.3.3", group: "g1" }] });
+  assert.equal(s.groups.find((g) => g.id === "g1").target, "10.0.0.5");
+  assert.equal(s.groups.find((g) => g.id === "g2").target, undefined);
+  const act = M.activeRules(s);
+  assert.equal(M.matchRule(act, "a.nl").ip, "1.1.1.1");
+  assert.equal(M.matchRule(act, "b.nl").ip, "10.0.0.5");
+  assert.equal(M.matchRule(act, "www.c.nl").ip, "10.0.0.5");
+  const b = M.allRules(s).find((r) => r.host === "b.nl");
+  assert.equal(b.ownIp, "2.2.2.2"); assert.equal(b.viaGroup, true);
+  assert.equal(s.rules.find((r) => r.host === "b.nl").ip, "2.2.2.2");
+  // Groeps-IP weg: terug naar het eigen IP.
+  const off = M.normState({ ...s, groups: s.groups.map((g) => ({ ...g, target: undefined })) });
+  assert.equal(M.matchRule(M.activeRules(off), "b.nl").ip, "2.2.2.2");
+  // Hostnaam als groepsdoel.
+  const hs = M.normState({ ...s, groups: s.groups.map((g) => (g.id === "g1" ? { ...g, target: "Srv1.Hosting.NL" } : g)) });
+  assert.equal(M.matchRule(M.activeRules(hs), "b.nl").ip, "srv1.hosting.nl");
+  // Hosts-formaat: kop met ip=, regels met het groepsdoel; importeren zet het groepsdoel terug.
+  const text = M.formatHosts(s.rules, s.groups);
+  assert.match(text, /# group: Staging #1971c2 ip=10\.0\.0\.5\n10\.0\.0\.5 b\.nl\n10\.0\.0\.5 \*\.c\.nl/);
+  const p = M.parseHosts(text);
+  assert.equal(p.groups.find((g) => g.name === "Staging").target, "10.0.0.5");
+  const m = M.mergeParsed(M.normState({}), p, "default", () => 0.5);
+  assert.equal(m.state.groups.find((g) => g.name === "Staging").target, "10.0.0.5");
+  assert.equal(M.parseGroupHeader("# group: X #1971c2 ip=10.0.0.9 off").target, "10.0.0.9");
+  assert.equal(M.parseGroupHeader("# group: X ip=niet geldig!").target, undefined);
 });
 await test("hosts-formaat: groepen (# group: Naam #kleur [off]), notities en hostnaam-doelen gaan heen en terug", () => {
   const s = M.normState({ groups: [{ id: "default" }, { id: "g1", name: "Klant X – staging", color: "#1971c2", enabled: false }],
@@ -235,7 +281,7 @@ await test("registreerbaar domein (bij benadering)", () => {
 });
 
 await test("verbindingen: regel / hosts-bestand / live, en 'nog live' bij hetzelfde domein", () => {
-  const st = M.normState({ enabled: true, rules: [{ host: "www.shop.nl", ip: "10.0.0.1" }, { host: "*.klant.nl", ip: "10.0.0.2" }] });
+  const st = M.normState({ enabled: true, wwwPair: false, rules: [{ host: "www.shop.nl", ip: "10.0.0.1" }, { host: "*.klant.nl", ip: "10.0.0.2" }] });
   const rec = { page: "www.shop.nl", total: 9, hosts: {
     "www.shop.nl": { n: 4, ips: ["127.0.0.1"], types: { main_frame: 1, image: 3 } },
     "cdn.shop.nl": { n: 2, ips: ["93.184.215.14"], types: { script: 2 } },
@@ -361,7 +407,7 @@ await test("headers: naam/waarde streng; hop-by-hop, verboden en eigen velden ge
   assert.deepEqual(g.headers, [{ name: "X-Ok", value: "1" }]); assert.equal(g.auth, null);
 });
 await test("DNR: alleen actieve regels van groepen met headers; exact = regex op de host, wildcard = domein + subdomeinen", () => {
-  const raw = { enabled: true, groups: [{ id: "default" }, { id: "stg", noCache: true, auth: { user: "jan", pass: "wächter" }, headers: [{ name: "X-Debug", value: "1" }] }, { id: "off", noCache: true, enabled: false }],
+  const raw = { enabled: true, wwwPair: false, groups: [{ id: "default" }, { id: "stg", noCache: true, auth: { user: "jan", pass: "wächter" }, headers: [{ name: "X-Debug", value: "1" }] }, { id: "off", noCache: true, enabled: false }],
     rules: [{ host: "a.nl", ip: "1.1.1.1" }, { host: "shop.x.nl", ip: "2.2.2.2", group: "stg" }, { host: "*.y.nl", ip: "3.3.3.3", group: "stg" }, { host: "api.y.nl", ip: "4.4.4.4" }, { host: "z.nl", ip: "5.5.5.5", group: "off" }, { host: "q.nl", ip: "6.6.6.6", group: "stg", enabled: false }] };
   const rules = M.buildDnrRules(M.normState(raw));
   assert.equal(rules.length, 2);

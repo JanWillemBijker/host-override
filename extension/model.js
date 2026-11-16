@@ -92,6 +92,8 @@ export function normGroup(g, i = 0) {
     }
   }
   if (typeof r.sub === "string" && GROUP_ID_RE.test(r.sub)) out.sub = r.sub;
+  // Eén doel voor de hele groep (IP of hostnaam): alle eigen regels in de groep gaan daarheen. Niet bij abonnementen.
+  else if (isTarget(r.target)) out.target = isIp(r.target) ? r.target : r.target.toLowerCase();
   return out;
 }
 
@@ -169,7 +171,7 @@ export function normState(raw = {}) {
     const n = normRule(r, ownIds);
     if (n && !rules.some((x) => x.host === n.host)) rules.push(n);
   }
-  return { enabled: raw.enabled === true, rules, groups: live, subs, exclusiveGroups: raw.exclusiveGroups === true };
+  return { enabled: raw.enabled === true, rules, groups: live, subs, exclusiveGroups: raw.exclusiveGroups === true, wwwPair: raw.wwwPair !== false };
 }
 
 export const groupOf = (state, id) => state.groups.find((g) => g.id === id) || state.groups.find((g) => g.id === DEFAULT_GROUP) || null;
@@ -177,7 +179,9 @@ export const groupOf = (state, id) => state.groups.find((g) => g.id === id) || s
 // Alle regels (eigen + abonnementen), met groep. Eigen regels gaan voor: bij dezelfde host wint de eerste.
 export function allRules(stateRaw) {
   const s = stateRaw && stateRaw.groups ? stateRaw : normState(stateRaw);
-  const out = s.rules.map((r) => ({ ...r }));
+  const gt = new Map(s.groups.filter((g) => g.target && !g.sub).map((g) => [g.id, g.target]));
+  // Groep met een eigen doel: de regel gaat naar dat doel; het eigen IP blijft bewaard (ownIp) voor als het groepsdoel weer weg gaat.
+  const out = s.rules.map((r) => (gt.has(r.group) ? { ...r, ip: gt.get(r.group), ownIp: r.ip, viaGroup: true } : { ...r }));
   for (const sub of s.subs) {
     const gid = subGroupId(sub.id);
     for (const r of sub.rules) out.push({ ...r, group: gid, sub: sub.id, readOnly: true });
@@ -189,12 +193,36 @@ export function allRules(stateRaw) {
 export const validRules = (rules) =>
   (Array.isArray(rules) ? rules : []).filter((r) => r && isHost(r.host) && isTarget(r.ip));
 
+// www en zonder www horen bij elkaar: "voorbeeld.nl" geldt ook voor "www.voorbeeld.nl" en andersom,
+// tenzij die andere variant een eigen regel heeft (ook een uitgezette). Wildcards dekken beide al.
+export function wwwTwin(host) {
+  const h = String(host).toLowerCase();
+  if (h.startsWith("*.") || isIp(h)) return null;
+  if (h.startsWith("www.")) { const b = h.slice(4); return b.includes(".") && isHost(b) ? b : null; }
+  const w = "www." + h;
+  return h.includes(".") && isHost(w) ? w : null;
+}
+export function addWwwTwins(rules, all = rules) {
+  const taken = new Set(all.map((r) => r.host));
+  const out = [...rules];
+  for (const r of rules) {
+    const tw = wwwTwin(r.host);
+    if (!tw || taken.has(tw)) continue;
+    taken.add(tw);
+    out.push({ ...r, host: tw, twinOf: r.host });
+  }
+  return out;
+}
+
 // Actief = hoofdschakelaar aan, groep aan, regel aan. Werkt ook met een oude toestand zonder groepen.
+// De www-tweelingen komen achteraan, dus een expliciete regel of wildcard gaat altijd voor.
 export function activeRules(stateRaw) {
   const s = stateRaw && stateRaw.groups && stateRaw.subs ? stateRaw : normState(stateRaw);
   if (!s.enabled) return [];
   const on = new Set(s.groups.filter((g) => g.enabled).map((g) => g.id));
-  return validRules(allRules(s)).filter((r) => r.enabled !== false && on.has(r.group));
+  const all = validRules(allRules(s));
+  const act = all.filter((r) => r.enabled !== false && on.has(r.group));
+  return s.wwwPair === false ? act : addWwwTwins(act, all);
 }
 
 // Zelfde matchlogica als de PAC-regel en de proxy: exact, of "*.domein" voor domein + subdomeinen. Eerste treffer wint.
@@ -228,17 +256,18 @@ export function activeGroups(state) {
 // 203.0.113.10 voorbeeld.nl          # notitie
 // #off 203.0.113.10 api.voorbeeld.nl  (uitgezette regel)
 // # group: Klant X – staging #1971c2  (alle regels hierna horen bij deze groep; "off" aan het eind = groep uit)
+// # group: Klant Y #2b8a3e ip=10.0.0.5  (één doel voor de hele groep; de regels staan er ook met dat doel)
 // server123.hostingpartij.nl shop.voorbeeld.nl   (doel als hostnaam)
 export function formatHosts(rules, groups) {
   const lines = [];
-  const line = (r) => `${r.enabled === false ? "#off " : ""}${r.ip} ${r.host}${r.note ? "  # " + cleanText(r.note, NOTE_MAX) : ""}`;
-  if (!Array.isArray(groups)) return rules.map(line).join("\n");
+  const line = (r, ip = r.ip) => `${r.enabled === false ? "#off " : ""}${ip} ${r.host}${r.note ? "  # " + cleanText(r.note, NOTE_MAX) : ""}`;
+  if (!Array.isArray(groups)) return rules.map((r) => line(r)).join("\n");
   for (const g of groups) {
     const list = rules.filter((r) => (r.group || DEFAULT_GROUP) === g.id);
     if (!list.length) continue;
     if (lines.length) lines.push("");
-    lines.push(`# group: ${g.name || (g.id === DEFAULT_GROUP ? "Default" : g.id)} ${g.color}${g.enabled === false ? " off" : ""}`);
-    lines.push(...list.map(line));
+    lines.push(`# group: ${g.name || (g.id === DEFAULT_GROUP ? "Default" : g.id)} ${g.color}${g.target ? " ip=" + g.target : ""}${g.enabled === false ? " off" : ""}`);
+    lines.push(...list.map((r) => line(r, g.target || r.ip)));
   }
   return lines.join("\n");
 }
@@ -246,12 +275,21 @@ export function formatHosts(rules, groups) {
 export function parseGroupHeader(line) {
   const m = line.match(/^#\s*group\s*:\s*(.*)$/i);
   if (!m) return null;
-  let rest = m[1].trim(), enabled = true, color = null;
+  let rest = m[1].trim(), enabled = true, color = null, target = null;
   if (/\s+off$/i.test(rest)) { enabled = false; rest = rest.replace(/\s+off$/i, ""); }
+  const tm = rest.match(/(?:^|\s)ip=(\S+)$/i);
+  if (tm) {
+    const v = isIp(tm[1]) ? tm[1] : tm[1].toLowerCase();
+    if (isTarget(v)) target = v;
+    rest = rest.slice(0, tm.index).trim();
+  }
   const c = rest.match(/(?:^|\s)(#[0-9a-f]{6})$/i);
   if (c) { color = c[1].toLowerCase(); rest = rest.slice(0, c.index).trim(); }
   const name = cleanText(rest, NAME_MAX);
-  return name ? { name, color, enabled } : null;
+  if (!name) return null;
+  const out = { name, color, enabled };
+  if (target) out.target = target;
+  return out;
 }
 
 // Uit: { rules: [{host, ip, enabled, note?, groupName?}], groups: [{name, color, enabled}], skipped }
@@ -294,8 +332,10 @@ export function mergeParsed(state, parsed, fallbackGroup = DEFAULT_GROUP, rnd = 
   const groups = state.groups.map((g) => ({ ...g }));
   const byName = (name) => groups.find((g) => !g.sub && (g.name || "").toLowerCase() === name.toLowerCase());
   for (const pg of parsed.groups) {
-    if (byName(pg.name) || (pg.name.toLowerCase() === "default" && groups.some((g) => g.id === DEFAULT_GROUP))) continue;
-    groups.push(normGroup({ id: newGroupId(groups, rnd), name: pg.name, color: pg.color || GROUP_COLORS[groups.length % GROUP_COLORS.length], enabled: pg.enabled }, groups.length));
+    const ex = byName(pg.name);
+    if (ex) { if (pg.target) ex.target = pg.target; continue; }
+    if (pg.name.toLowerCase() === "default" && groups.some((g) => g.id === DEFAULT_GROUP)) continue;
+    groups.push(normGroup({ id: newGroupId(groups, rnd), name: pg.name, color: pg.color || GROUP_COLORS[groups.length % GROUP_COLORS.length], enabled: pg.enabled, target: pg.target }, groups.length));
   }
   const gidFor = (name) => {
     if (!name) return groups.some((g) => g.id === fallbackGroup && !g.sub) ? fallbackGroup : DEFAULT_GROUP;
@@ -383,7 +423,10 @@ export function buildDnrRules(state) {
 
 // Origins waarvoor de extensie toegang nodig heeft om headers te zetten (per groep).
 export function groupOrigins(state, groupId) {
-  return [...new Set(allRules(state).filter((r) => r.group === groupId).map((r) => `*://${r.host}/*`))];
+  const rules = allRules(state).filter((r) => r.group === groupId);
+  const hosts = rules.map((r) => r.host);
+  if (state.wwwPair !== false) for (const r of rules) { const tw = wwwTwin(r.host); if (tw) hosts.push(tw); }
+  return [...new Set(hosts.map((h) => `*://${h}/*`))];
 }
 
 // Weergavenaam van een groep. t = vertaalfunctie (model.js zelf kent geen taal).
@@ -435,7 +478,7 @@ export function analyzeConnections(rec, active, hostsHits = {}) {
 // Wat meegaat: eigen regels, groepen (zonder Basic-auth-wachtwoord), abonnementen (alleen URL en interval,
 // niet de opgehaalde regels) en instellingen. Nooit het helper-geheim. Quota: ~100 KB totaal, 8 KB per item:
 // de JSON gaat als base64 in stukken van 7000 tekens ("ho:c0", "ho:c1", ...) met "ho:meta" erbij.
-export const SYNC_SETTINGS = ["indicator", "pageBadge", "autoReload", "lang", "exclusiveGroups", "dohProvider", "sideDefault"];
+export const SYNC_SETTINGS = ["indicator", "pageBadge", "autoReload", "lang", "exclusiveGroups", "dohProvider", "sideDefault", "wwwPair"];
 export const SYNC_CHUNK = 7000;
 export const SYNC_MAX = 90 * 1024; // marge onder de 102400 bytes van chrome.storage.sync
 export function syncPayload(raw) {
